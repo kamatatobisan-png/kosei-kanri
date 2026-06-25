@@ -337,6 +337,13 @@ function App(){
   const attendance  =get("attendance");
   const reports     =get("reports");
 
+  // 設定タブ用：現場を色順→完工順でソート
+  const sortedSites=useMemo(()=>{
+    const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>a.color.localeCompare(b.color));
+    const done  =[...sites.filter(s=> s.completed)].sort((a,b)=>a.color.localeCompare(b.color));
+    return[...active,...done];
+  },[sites]);
+
   // 稼働中 / 完工済みで分類
   const activeSites   =useMemo(()=>sites.filter(s=>!s.completed),[sites]);
   const completedSites=useMemo(()=>sites.filter(s=>s.completed),[sites]);
@@ -1449,9 +1456,38 @@ function App(){
                 <span style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{cl.name}</span><span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>
             )},
-            {title:"現場一覧",color:"#F97316",items:sites,add:()=>openModal("site","add",{name:"",clientId:clients[0]?.id,capacity:4,color:COLORS[sites.length%COLORS.length]}),row:s=>{
+            {title:"現場一覧",color:"#F97316",items:sites,
+              sortedItems:useMemo(()=>{
+                const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
+                const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+                const done  =[...sites.filter(s=> s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+                return[...active,...done];
+              },[sites,clients]),
+              add:()=>openModal("site","add",{name:"",clientId:clients[0]?.id,capacity:4,color:COLORS[sites.length%COLORS.length]}),
+              // 元請け会社ごとにグループヘッダーを挿入するためrowsを生成
+              rowsWithHeader:(sortedItems)=>{
+                const rows=[];let lastClient=null;let lastCompleted=null;
+                sortedItems.forEach(s=>{
+                  const cl=clients.find(c=>c.id===s.clientId);
+                  const clName=cl?.name||"─";
+                  // 完工セパレーター
+                  if(s.completed&&lastCompleted===false){
+                    rows.push({type:"sep_completed"});
+                    lastClient=null;
+                  }
+                  // 元請けグループヘッダー
+                  if(clName!==lastClient){
+                    rows.push({type:"header",label:clName,completed:s.completed});
+                    lastClient=clName;
+                  }
+                  rows.push({type:"site",site:s,cl});
+                  lastCompleted=!!s.completed;
+                });
+                return rows;
+              },
+              row:s=>{
               const cl=clients.find(c=>c.id===s.clientId);
-              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":s.color}`}}>
+              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:s.completed?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":s.color}`}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
                     <div style={{fontSize:13,fontWeight:700,color:s.completed?"#94A3B8":s.color}}>{s.name}</div>
@@ -1475,7 +1511,24 @@ function App(){
                 <button onClick={sec.add} style={{background:`${sec.color}14`,border:`1px solid ${sec.color}44`,borderRadius:6,padding:"4px 11px",fontSize:11,color:sec.color,fontWeight:700,cursor:"pointer"}}>＋ 追加</button>
               </div>
               <div style={{background:"#fff",borderRadius:10,overflow:"hidden",border:"1px solid #E2E8F0"}}>
-                {sec.items.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>未登録</div>:sec.items.map(sec.row)}
+                {sec.items.length===0
+                  ?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>未登録</div>
+                  :sec.rowsWithHeader
+                    ? sec.rowsWithHeader(sec.sortedItems||sec.items).map((row,ri)=>{
+                        if(row.type==="header") return(
+                          <div key={`h${ri}`} style={{padding:"5px 12px 4px",background:row.completed?"#F1F5F9":"#FFF7ED",borderBottom:"1px solid #F1F5F9",borderTop:ri>0?"1px solid #E2E8F0":"none",display:"flex",alignItems:"center",gap:5}}>
+                            <span style={{fontSize:9,color:row.completed?"#94A3B8":"#EA580C",fontWeight:700,letterSpacing:".05em"}}>{row.label}</span>
+                          </div>
+                        );
+                        if(row.type==="sep_completed") return(
+                          <div key={`sc${ri}`} style={{padding:"5px 12px",background:"#F1F5F9",borderTop:"2px solid #CBD5E1",borderBottom:"1px solid #E2E8F0",display:"flex",alignItems:"center",gap:5}}>
+                            <span style={{fontSize:10,color:"#94A3B8",fontWeight:700}}>✓ 完工した工事</span>
+                          </div>
+                        );
+                        return sec.row(row.site);
+                      })
+                    : (sec.sortedItems||sec.items).map(sec.row)
+                }
               </div>
             </div>
           ))}
