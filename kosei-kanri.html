@@ -213,6 +213,7 @@ const SEED={
 // ─── ストア ───────────────────────────────────────
 // ─── ストア ───────────────────────────────────────
 const LS="kms_v2";
+const LS_TS="kms_v2_ts"; // 後方互換のため保持
 
 function useStore(){
   // 起動時：localStorageから読み込む（GAS取得前の一時表示用）
@@ -390,13 +391,9 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
         addLog(`  _ts(GASタイムスタンプ): ${data._ts||"なし"}`,data._ts?"ok":"warn");
       }
       // ローカルとの比較
-      const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+      const localTS=0; // 新sync方式ではTS未使用
       const gasTS=parseInt(data._ts||"0");
-      addLog(`③ ローカルTS: ${localTS||"未設定"}`,"info");
-      addLog(`   GAS TS: ${gasTS||"未設定"}`,"info");
-      if(!localTS&&!gasTS)addLog("→ 両方未設定：📤送信で初回同期してください","warn");
-      else if(gasTS>=localTS)addLog("→ GASが新しい：起動時にGASデータを使用","ok");
-      else addLog("→ ローカルが新しい：起動時にGASへ送信","ok");
+      addLog("③ GASとの接続・データ確認完了","ok");
       // 完工現場チェック
       const comp=(data.sites||[]).filter(s=>s.completed);
       addLog(`④ 完工現場: ${comp.length}件 ${comp.map(s=>s.name).join(", ")||"なし"}`,comp.length>0?"ok":"info");
@@ -416,7 +413,7 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
     try{
       await gasPost("saveAll",snap);
       addLog("✅ 送信完了！他端末でページを更新してください","ok");
-      localStorage.setItem(LS_TS,Date.now().toString());
+      // TS不使用
     }catch(e){addLog("✗ 送信失敗: "+e.message,"error");}
   };
 
@@ -433,7 +430,7 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
         // localStorageを直接更新してリロード
         const current=JSON.parse(localStorage.getItem(LS)||"{}");
         localStorage.setItem(LS,JSON.stringify({...current,...next}));
-        localStorage.setItem(LS_TS,Date.now().toString());
+        // TS不使用
         addLog("✅ 取得完了！ページをリロードします...","ok");
         setTimeout(()=>window.location.reload(),1000);
       } else {
