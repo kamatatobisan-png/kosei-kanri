@@ -214,24 +214,35 @@ const SEED={
 const LS="kms_v2";
 const LS_TS="kms_v2_ts";
 
-// IDベースでアイテムをマージ（ローカルの追加フィールドを保持）
+// IDベースでアイテムをマージ（GAS優先・ローカルにしかない項目は保持）
 function mergeById(local=[], remote=[]){
   const localMap={};
   local.forEach(item=>{if(item?.id!=null)localMap[String(item.id)]=item;});
-  const result=[...local]; // ローカルをベースに
+  const remoteMap={};
+  remote.forEach(item=>{if(item?.id!=null)remoteMap[String(item.id)]=item;});
+
+  const result=[];
+
+  // GASのアイテムを基準に処理（GAS優先）
   remote.forEach(remoteItem=>{
     if(!remoteItem?.id)return;
     const key=String(remoteItem.id);
     if(localMap[key]){
-      // 既存アイテム：ローカルを優先しつつGASの新規フィールドも取り込む
-      // ただしローカル独自フィールドは必ず保持
-      const idx=result.findIndex(x=>String(x.id)===key);
-      if(idx>=0) result[idx]={...remoteItem,...localMap[key]}; // ローカル優先
+      // 同じIDが両方にある → GAS優先でマージ（ローカルにしかないフィールドも保持）
+      result.push({...localMap[key],...remoteItem});
     } else {
-      // GASにしかないアイテム（他ユーザーが追加）→ 追加
+      // GASにしかない → そのまま追加
       result.push(remoteItem);
     }
   });
+
+  // ローカルにしかないアイテム（GASにpushできていない可能性）→ 保持
+  local.forEach(localItem=>{
+    if(!localItem?.id)return;
+    const key=String(localItem.id);
+    if(!remoteMap[key]) result.push(localItem);
+  });
+
   return result;
 }
 
