@@ -337,9 +337,14 @@ function App(){
   const hRef=useRef(null),bRef=useRef(null),lRef=useRef(null);
   const lockH=useRef(false),lockV=useRef(false);
   useEffect(()=>{
-    const off=Math.max(0,todayIdx*DW-80);
-    if(hRef.current)hRef.current.scrollLeft=off;
-    if(bRef.current)bRef.current.scrollLeft=off;
+    if(todayIdx<0)return;
+    // 今日を画面中央付近に表示（LW分を引いた表示幅の半分左にスクロール）
+    const visibleW=Math.max(200,window.innerWidth-LW);
+    const off=Math.max(0,todayIdx*DW-Math.floor(visibleW/2));
+    setTimeout(()=>{
+      if(hRef.current)hRef.current.scrollLeft=off;
+      if(bRef.current)bRef.current.scrollLeft=off;
+    },50);
   },[todayIdx]);
   const onScrollH=()=>{if(lockH.current)return;lockH.current=true;if(bRef.current)bRef.current.scrollLeft=hRef.current.scrollLeft;requestAnimationFrame(()=>lockH.current=false);};
   const onScrollB=()=>{
