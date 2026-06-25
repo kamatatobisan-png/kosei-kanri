@@ -369,6 +369,16 @@ function App(){
   const onScrollL=()=>{if(lockV.current)return;lockV.current=true;if(bRef.current)bRef.current.scrollTop=lRef.current.scrollTop;requestAnimationFrame(()=>lockV.current=false);};
 
   // ─── 計算 ─────────────────────────────────────
+  // 設定タブ用ソート済みリスト（useMemoをコンポーネントトップレベルで定義）
+  const sortedClients=useMemo(()=>[...clients].sort((a,b)=>a.name.localeCompare(b.name,"ja")),[clients]);
+  const sortedSites  =useMemo(()=>{
+    const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
+    const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+    const done  =[...sites.filter(s=> s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+    return[...active,...done];
+  },[sites,clients]);
+  const sortedWorkers=useMemo(()=>[...workerMaster].sort((a,b)=>a.company.localeCompare(b.company,"ja")||a.name.localeCompare(b.name,"ja")),[workerMaster]);
+
   const reqOnDay=date=>tasks.filter(t=>date>=t.start&&date<=t.end&&isWorkDay(date,t)).reduce((s,t)=>s+t.workers,0);
   const reqBySite=(sid,date)=>{const t=tasks.find(t=>t.siteId===sid&&date>=t.start&&date<=t.end);return(t&&isWorkDay(date,t))?t.workers:0;};
 
@@ -1452,7 +1462,7 @@ function App(){
 
           {[
             {title:"元請け会社",color:"#3B82F6",items:clients,
-              sortedItems:useMemo(()=>[...clients].sort((a,b)=>a.name.localeCompare(b.name,"ja")),[clients]),
+              sortedItems:sortedClients,
               add:()=>openModal("client","add",{name:""}),row:cl=>(
               <div key={cl.id} className="row" onClick={()=>openModal("client","edit",{...cl})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
                 <div>
@@ -1463,12 +1473,7 @@ function App(){
               </div>
             )},
             {title:"現場一覧",color:"#F97316",items:sites,
-              sortedItems:useMemo(()=>{
-                const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
-                const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
-                const done  =[...sites.filter(s=> s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
-                return[...active,...done];
-              },[sites,clients]),
+              sortedItems:sortedSites,
               add:()=>openModal("site","add",{name:"",clientId:clients[0]?.id,capacity:4,color:COLORS[sites.length%COLORS.length]}),
               // 元請け会社ごとにグループヘッダーを挿入するためrowsを生成
               rowsWithHeader:(sortedItems)=>{
@@ -1507,7 +1512,7 @@ function App(){
               </div>);
             }},
             {title:"作業員マスタ",color:"#16A34A",items:workerMaster,
-              sortedItems:useMemo(()=>[...workerMaster].sort((a,b)=>a.company.localeCompare(b.company,"ja")||(a.name.localeCompare(b.name,"ja"))),[workerMaster]),
+              sortedItems:sortedWorkers,
               rowsWithHeader:(sortedItems)=>{
                 const rows=[];let lastCo=null;
                 sortedItems.forEach(w=>{
