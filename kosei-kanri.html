@@ -223,7 +223,22 @@ function useStore(){
   const pull=useCallback(async()=>{
     if(!gasOK())return;
     setSyncing(true);setSyncErr(null);
-    try{const d=await gasGet("getAll");if(d&&Object.keys(d).length){setStore(p=>({...p,...d}));setSynced(true);setLastSync(nowStr());}}
+    try{
+      const d=await gasGet("getAll");
+      if(d&&Object.keys(d).length){
+        // 空配列でローカルデータを上書きしないようにフィルタ
+        const safe={};
+        Object.entries(d).forEach(([k,v])=>{
+          if(Array.isArray(v)&&v.length>0) safe[k]=v;
+          else if(!Array.isArray(v)&&v) safe[k]=v;
+        });
+        if(Object.keys(safe).length>0){
+          setStore(p=>({...p,...safe}));
+          setSynced(true);
+          setLastSync(nowStr());
+        }
+      }
+    }
     catch(e){setSyncErr(e.message);}
     finally{setSyncing(false);}
   },[]);
@@ -1573,8 +1588,33 @@ function App(){
 
           {/* バックアップ */}
           <div style={{marginBottom:16}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍バックアップ</div>
+            <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍バックアップ・同期</div>
             <div style={{background:"#fff",borderRadius:10,border:"1px solid #E2E8F0",padding:"12px 14px"}}>
+
+              {/* GAS同期ボタン（アップデート後はここから送信） */}
+              {gasOK()&&(
+                <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:9,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#16A34A",marginBottom:4}}>🔄 スプレッドシート同期</div>
+                  <div style={{fontSize:10,color:"#64748B",marginBottom:8,lineHeight:1.6}}>
+                    アプリ更新後や別端末との同期に使用してください。
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                    <button onClick={async()=>{
+                      const snap=JSON.parse(localStorage.getItem(LS)||"{}");
+                      try{
+                        await gasPost("saveAll",snap);
+                        alert("✅ ローカルデータをGASに送信しました！\n他の端末でアプリを開き直すと反映されます。");
+                      }catch(e){alert("✗ 送信失敗: "+e.message);}
+                    }} style={{background:"#16A34A",border:"none",borderRadius:8,padding:"10px",fontSize:12,color:"#fff",fontWeight:700,cursor:"pointer"}}>
+                      📤 GASへ送信
+                    </button>
+                    <button onClick={pull} style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:8,padding:"10px",fontSize:12,color:"#2563EB",fontWeight:700,cursor:"pointer"}}>
+                      📥 GASから取得
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
                 <button onClick={()=>{const s=JSON.parse(localStorage.getItem(LS)||"{}");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s,null,2)],{type:"application/json"}));a.download=`backup_${nowStr().replace(/[: ]/g,"-")}.json`;a.click();}} style={{background:"#EEF2FF",border:"1px solid #C7D2FE",borderRadius:8,padding:"10px",fontSize:12,color:"#4F46E5",fontWeight:700,cursor:"pointer"}}>📥 JSONバックアップ</button>
                 <label style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:8,padding:"10px",fontSize:12,color:"#16A34A",fontWeight:700,cursor:"pointer",textAlign:"center"}}>
@@ -1582,7 +1622,9 @@ function App(){
                   <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);localStorage.setItem(LS,JSON.stringify(d));alert("復元しました。ページを更新してください");}catch(_){alert("ファイルエラー");}};r.readAsText(e.target.files[0]);}}/>
                 </label>
               </div>
-              <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.6}}>データはブラウザに自動保存されます。定期的にJSONをダウンロードして保管してください。</div>
+              <div style={{fontSize:10,color:"#94A3B8",lineHeight:1.7}}>
+                💡 アプリを更新したときは「📤 GASへ送信」を1回実行してください。以降は自動で同期されます。
+              </div>
             </div>
           </div>
         </div>
