@@ -247,10 +247,71 @@ function useStore(){
     const MAP={clients:"saveClients",sites:"saveSites",tasks:"saveTasks",workerMaster:"saveWorkerMaster",attendance:"saveAttendance",reports:"saveReports"};
     try{await gasPost(MAP[key]||"saveAll",val);setLastSync(nowStr());}catch(e){setSyncErr(e.message);}
   },[]);
-  useEffect(()=>{pull();},[]);
+
+  // 全ローカルデータをGASに送信
+  const pushAll=useCallback(async(currentStore)=>{
+    if(!gasOK())return;
+    setSyncing(true);
+    try{
+      const snap=currentStore||JSON.parse(localStorage.getItem(LS)||"{}");
+      await gasPost("saveAll",snap);
+      setSynced(true);
+      setLastSync(nowStr());
+    }catch(e){setSyncErr(e.message);}
+    finally{setSyncing(false);}
+  },[]);
+
+  // 起動時：GASからpull → GASが空ならローカルをpush
+  useEffect(()=>{
+    if(!gasOK())return;
+    (async()=>{
+      setSyncing(true);setSyncErr(null);
+      try{
+        const d=await gasGet("getAll");
+        const hasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
+        if(hasData){
+          // GASにデータあり → マージ
+          const safe={};
+          Object.entries(d).forEach(([k,v])=>{
+            if(Array.isArray(v)&&v.length>0)safe[k]=v;
+            else if(!Array.isArray(v)&&v)safe[k]=v;
+          });
+          setStore(p=>({...p,...safe}));
+          setSynced(true);setLastSync(nowStr());
+        } else {
+          // GASが空 → ローカルデータを自動送信
+          const snap=JSON.parse(localStorage.getItem(LS)||"{}");
+          const hasLocal=Object.values(snap).some(v=>Array.isArray(v)&&v.length>0);
+          if(hasLocal){
+            await gasPost("saveAll",snap);
+            setSynced(true);setLastSync(nowStr());
+          }
+        }
+      }catch(e){setSyncErr(e.message);}
+      finally{setSyncing(false);}
+    })();
+  },[]);
+
+  // 30秒ごとに自動pull（タブがアクティブな時のみ）
+  useEffect(()=>{
+    if(!gasOK())return;
+    const interval=setInterval(()=>{
+      if(!document.hidden)pull();
+    },30000);
+    return()=>clearInterval(interval);
+  },[pull]);
+
+  // タブが再表示されたときに即pull
+  useEffect(()=>{
+    if(!gasOK())return;
+    const onVisible=()=>{if(!document.hidden)pull();};
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>document.removeEventListener("visibilitychange",onVisible);
+  },[pull]);
+
   const get=k=>store[k]||[];
   const set=(k,v)=>{setStore(p=>({...p,[k]:v}));push(k,v);};
-  return{get,set,store,pull,syncing,syncErr,synced,lastSync,setStore};
+  return{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore};
 }
 
 // ─── 管理者パスワード ─────────────────────────────
@@ -329,7 +390,7 @@ function App(){
   const days=useMemo(()=>drange(VIEW_S,VIEW_E),[]);
   const todayIdx=useMemo(()=>days.findIndex(d=>fmtD(d)===fmtD(TODAY)),[days]);
 
-  const{get,set,store,pull,syncing,syncErr,synced,lastSync,setStore}=useStore();
+  const{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore}=useStore();
   const admin=useAdmin();
   const{w:winW}=useWindowSize();
   const isPortrait=winW<600; // 縦向き判定（600px未満を縦向きとみなす）
@@ -1600,9 +1661,8 @@ function App(){
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
                     <button onClick={async()=>{
-                      const snap=JSON.parse(localStorage.getItem(LS)||"{}");
                       try{
-                        await gasPost("saveAll",snap);
+                        await pushAll();
                         alert("✅ ローカルデータをGASに送信しました！\n他の端末でアプリを開き直すと反映されます。");
                       }catch(e){alert("✗ 送信失敗: "+e.message);}
                     }} style={{background:"#16A34A",border:"none",borderRadius:8,padding:"10px",fontSize:12,color:"#fff",fontWeight:700,cursor:"pointer"}}>
