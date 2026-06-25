@@ -1785,7 +1785,7 @@ function App(){
             <MField label="工程名"><input type="text" placeholder="例：基礎工事" value={form.name||""} onChange={e=>setForm({...form,name:e.target.value})} style={IS}/></MField>
             <MField label="開始日"><input type="date" value={form.start||""} onChange={e=>setForm({...form,start:e.target.value})} style={IS}/></MField>
             <MField label="終了日"><input type="date" value={form.end||""} onChange={e=>setForm({...form,end:e.target.value})} style={IS}/></MField>
-            <MField label="1日あたり予定人数"><input type="number" min={1} value={form.workers||1} onChange={e=>setForm({...form,workers:e.target.value})} style={IS}/></MField>
+            <MField label="1日あたり予定人数"><input type="number" min={1} placeholder="人数を入力" value={form.workers===undefined||form.workers===null?"":form.workers} onChange={e=>setForm({...form,workers:e.target.value===""?"":+e.target.value})} style={IS}/></MField>
             <MField label="備考"><input type="text" placeholder="翌日計画など" value={form.memo||""} onChange={e=>setForm({...form,memo:e.target.value})} style={IS}/></MField>
             <MField label="特記事項"><textarea placeholder="注意事項など" value={form.note||""} onChange={e=>setForm({...form,note:e.target.value})} style={{...TA,minHeight:52}}/></MField>
 
