@@ -212,7 +212,28 @@ const SEED={
 
 // ─── ストア ───────────────────────────────────────
 const LS="kms_v2";
-const LS_TS="kms_v2_ts"; // ローカルの最終更新タイムスタンプ
+const LS_TS="kms_v2_ts";
+
+// IDベースでアイテムをマージ（ローカルの追加フィールドを保持）
+function mergeById(local=[], remote=[]){
+  const localMap={};
+  local.forEach(item=>{if(item?.id!=null)localMap[String(item.id)]=item;});
+  const result=[...local]; // ローカルをベースに
+  remote.forEach(remoteItem=>{
+    if(!remoteItem?.id)return;
+    const key=String(remoteItem.id);
+    if(localMap[key]){
+      // 既存アイテム：ローカルを優先しつつGASの新規フィールドも取り込む
+      // ただしローカル独自フィールドは必ず保持
+      const idx=result.findIndex(x=>String(x.id)===key);
+      if(idx>=0) result[idx]={...remoteItem,...localMap[key]}; // ローカル優先
+    } else {
+      // GASにしかないアイテム（他ユーザーが追加）→ 追加
+      result.push(remoteItem);
+    }
+  });
+  return result;
+}
 
 function useStore(){
   const load=()=>{try{const s=localStorage.getItem(LS);if(s)return JSON.parse(s);}catch(_){}return SEED;};
@@ -222,7 +243,6 @@ function useStore(){
   const[synced,setSynced]=useState(false);
   const[lastSync,setLastSync]=useState(null);
 
-  // ローカル保存（タイムスタンプも更新）
   const setStore=useCallback(fn=>{
     _set(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
@@ -234,16 +254,12 @@ function useStore(){
     });
   },[]);
 
-  // ローカルのタイムスタンプ取得
-  const localTS=()=>parseInt(localStorage.getItem(LS_TS)||"0");
-
-  // GASへ全データ送信（タイムスタンプ付き）
+  // GASへ全データ送信
   const pushAll=useCallback(async(snap)=>{
     if(!gasOK())return false;
     setSyncing(true);
     try{
       const data=snap||JSON.parse(localStorage.getItem(LS)||"{}");
-      data._ts=localTS(); // タイムスタンプを埋め込む
       await gasPost("saveAll",data);
       setSynced(true);setLastSync(nowStr());
       return true;
@@ -251,26 +267,23 @@ function useStore(){
     finally{setSyncing(false);}
   },[]);
 
-  // GASから取得して上書き
+  // GASからpull（IDベースマージ）
   const pull=useCallback(async()=>{
     if(!gasOK())return;
     setSyncing(true);setSyncErr(null);
     try{
       const d=await gasGet("getAll");
-      if(d&&Object.keys(d).length){
-        const safe={};
-        Object.entries(d).forEach(([k,v])=>{
-          if(k==="_ts")return; // タイムスタンプはスキップ
-          if(Array.isArray(v)&&v.length>0)safe[k]=v;
-          else if(!Array.isArray(v)&&v!=null&&v!=="")safe[k]=v;
+      if(!d||!Object.keys(d).length){setSyncing(false);return;}
+      setStore(p=>{
+        const next={...p};
+        ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+          if(Array.isArray(d[k])&&d[k].length>0){
+            next[k]=mergeById(p[k]||[],d[k]);
+          }
         });
-        if(Object.keys(safe).length>0){
-          setStore(p=>({...p,...safe}));
-          // pullした後のタイムスタンプはGASに合わせる
-          if(d._ts)localStorage.setItem(LS_TS,d._ts.toString());
-          setSynced(true);setLastSync(nowStr());
-        }
-      }
+        return next;
+      });
+      setSynced(true);setLastSync(nowStr());
     }catch(e){setSyncErr(e.message);}
     finally{setSyncing(false);}
   },[]);
@@ -284,52 +297,38 @@ function useStore(){
     catch(e){setSyncErr(e.message);}
   },[]);
 
-  // ── 起動時の同期ロジック ────────────────────────
+  // 起動時：GASからpull → GASが空ならローカルをpush
   useEffect(()=>{
     if(!gasOK())return;
     (async()=>{
       setSyncing(true);setSyncErr(null);
       try{
         const d=await gasGet("getAll");
-        const gasTS=d?._ts||0;
-        const locTS=localTS();
         const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
-
-        if(!gasHasData){
-          // ① GASが空 → ローカルをpush
-          const snap=JSON.parse(localStorage.getItem(LS)||"{}");
-          const locHasData=Object.values(snap).some(v=>Array.isArray(v)&&v.length>0);
-          if(locHasData){
-            snap._ts=locTS;
-            await gasPost("saveAll",snap);
-            setSynced(true);setLastSync(nowStr());
-          }
-        } else if(locTS>gasTS){
-          // ② ローカルの方が新しい → ローカルをGASへpush
-          const snap=JSON.parse(localStorage.getItem(LS)||"{}");
-          snap._ts=locTS;
-          await gasPost("saveAll",snap);
+        if(gasHasData){
+          // GASにデータあり → IDベースマージ（ローカル優先）
+          setStore(p=>{
+            const next={...p};
+            ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+              if(Array.isArray(d[k])&&d[k].length>0){
+                next[k]=mergeById(p[k]||[],d[k]);
+              }
+            });
+            return next;
+          });
           setSynced(true);setLastSync(nowStr());
         } else {
-          // ③ GASの方が新しいか同じ → GASからpull
-          const safe={};
-          Object.entries(d).forEach(([k,v])=>{
-            if(k==="_ts")return;
-            if(Array.isArray(v)&&v.length>0)safe[k]=v;
-            else if(!Array.isArray(v)&&v!=null&&v!=="")safe[k]=v;
-          });
-          if(Object.keys(safe).length>0){
-            setStore(p=>({...p,...safe}));
-            if(d._ts)localStorage.setItem(LS_TS,d._ts.toString());
-            setSynced(true);setLastSync(nowStr());
-          }
+          // GASが空 → ローカルを送信
+          const snap=JSON.parse(localStorage.getItem(LS)||"{}");
+          const locHasData=Object.values(snap).some(v=>Array.isArray(v)&&v.length>0);
+          if(locHasData){await gasPost("saveAll",snap);setSynced(true);setLastSync(nowStr());}
         }
       }catch(e){setSyncErr(e.message);}
       finally{setSyncing(false);}
     })();
   },[]);
 
-  // 30秒ごとに自動pull（タブアクティブ時のみ）
+  // 30秒ごとに自動pull
   useEffect(()=>{
     if(!gasOK())return;
     const id=setInterval(()=>{if(!document.hidden)pull();},30000);
