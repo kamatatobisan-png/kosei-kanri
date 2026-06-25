@@ -221,7 +221,6 @@ function useStore(){
       const s=localStorage.getItem(LS);
       if(s){const d=JSON.parse(s);if(d&&Object.keys(d).length)return d;}
     }catch(_){}
-    // SEEDをlocalStorageに保存してから返す
     try{localStorage.setItem(LS,JSON.stringify(SEED));}catch(_){}
     return SEED;
   };
@@ -231,7 +230,7 @@ function useStore(){
   const[lastSync,setLastSync]=useState(null);
   const[synced,setSynced]=useState(false);
 
-  // ローカル保存
+  // ローカル保存（タイムスタンプ更新）
   const saveLocal=useCallback((next)=>{
     try{
       localStorage.setItem(LS,JSON.stringify(next));
@@ -243,16 +242,17 @@ function useStore(){
     _set(prev=>{const next=typeof fn==="function"?fn(prev):fn;saveLocal(next);return next;});
   },[saveLocal]);
 
-  // GASへ全データ送信（必ず全量）
+  // GASへ全データ送信（タイムスタンプ付き）
   const syncUp=useCallback(async(data)=>{
     if(!gasOK())return;
+    const ts=parseInt(localStorage.getItem(LS_TS)||"0");
     try{
-      await gasPost("saveAll",data);
+      await gasPost("saveAll",{...data,_ts:ts});
       setLastSync(nowStr());setSyncErr(null);setSynced(true);
     }catch(e){setSyncErr("送信失敗: "+e.message);}
   },[]);
 
-  // GASからデータ取得してローカルを完全置き換え
+  // GASからデータ取得してローカルを置き換え（強制）
   const syncDown=useCallback(async()=>{
     if(!gasOK())return;
     setSyncing(true);setSyncErr(null);
@@ -274,16 +274,36 @@ function useStore(){
   const pull=syncDown;
   const pushAll=syncUp;
 
-  // 起動時
+  // ── 起動時：タイムスタンプ比較で新しい方を使う ──
   useEffect(()=>{
     if(!gasOK())return;
     (async()=>{
       setSyncing(true);
       try{
         const d=await gasGet("getAll");
-        const hasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
-        if(hasData){
-          // GASにデータあり → 適用
+        const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
+        const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+        const gasTS=parseInt(d?._ts||"0");
+        const isNewDevice=localTS===0; // 一度も保存したことがない端末
+
+        if(!gasHasData){
+          // GASが空 → ローカルをGASへ送信
+          const snap=JSON.parse(localStorage.getItem(LS)||"{}");
+          if(Object.values(snap).some(v=>Array.isArray(v)&&v.length>0)){
+            const ts=parseInt(localStorage.getItem(LS_TS)||Date.now().toString());
+            await gasPost("saveAll",{...snap,_ts:ts});
+            setLastSync(nowStr());setSynced(true);
+          }
+        } else if(isNewDevice){
+          // 新規端末 → GASデータをそのまま使用
+          const upd={};
+          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+            if(Array.isArray(d[k]))upd[k]=d[k];
+          });
+          setStore(p=>({...p,...upd}));
+          setLastSync(nowStr());setSynced(true);
+        } else if(gasTS>localTS){
+          // GASの方が新しい → GASを適用
           const upd={};
           ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
             if(Array.isArray(d[k]))upd[k]=d[k];
@@ -291,39 +311,71 @@ function useStore(){
           setStore(p=>({...p,...upd}));
           setLastSync(nowStr());setSynced(true);
         } else {
-          // GASが空 → 現在のstoreをGASへ送信
+          // ローカルの方が新しい → ローカルをGASへ送信
           const snap=JSON.parse(localStorage.getItem(LS)||"{}");
-          if(Object.values(snap).some(v=>Array.isArray(v)&&v.length>0)){
-            await gasPost("saveAll",snap);
-            setLastSync(nowStr());setSynced(true);
-          }
+          await gasPost("saveAll",{...snap,_ts:localTS});
+          setLastSync(nowStr());setSynced(true);
         }
       }catch(e){setSyncErr("起動時同期失敗: "+e.message);}
       finally{setSyncing(false);}
     })();
   },[]);
 
-  // 30秒ごと自動pull
+  // 30秒ごと自動pull（GASが新しければ適用）
   useEffect(()=>{
     if(!gasOK())return;
-    const id=setInterval(()=>{if(!document.hidden)syncDown();},30000);
+    const id=setInterval(async()=>{
+      if(document.hidden)return;
+      try{
+        const d=await gasGet("getAll");
+        const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
+        if(!gasHasData)return;
+        const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+        const gasTS=parseInt(d?._ts||"0");
+        if(gasTS>localTS){
+          // GASが新しければ適用
+          const upd={};
+          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+            if(Array.isArray(d[k]))upd[k]=d[k];
+          });
+          setStore(p=>({...p,...upd}));
+          setLastSync(nowStr());
+        }
+      }catch(_){}
+    },30000);
     return()=>clearInterval(id);
-  },[syncDown]);
+  },[setStore]);
 
-  // タブ復帰時即pull
+  // タブ復帰時も同様
   useEffect(()=>{
     if(!gasOK())return;
-    const fn=()=>{if(!document.hidden)syncDown();};
+    const fn=async()=>{
+      if(document.hidden)return;
+      try{
+        const d=await gasGet("getAll");
+        const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
+        if(!gasHasData)return;
+        const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+        const gasTS=parseInt(d?._ts||"0");
+        if(gasTS>localTS){
+          const upd={};
+          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+            if(Array.isArray(d[k]))upd[k]=d[k];
+          });
+          setStore(p=>({...p,...upd}));
+          setLastSync(nowStr());
+        }
+      }catch(_){}
+    };
     document.addEventListener("visibilitychange",fn);
     return()=>document.removeEventListener("visibilitychange",fn);
-  },[syncDown]);
+  },[setStore]);
 
   const get=k=>store[k]||[];
-  // set: Reactのstore stateをベースに更新（localStorageの読み直し不要）
   const set=(k,v)=>{
     setStore(prev=>{
       const next={...prev,[k]:v};
-      syncUp(next); // 全量GAS送信
+      syncUp(next);
       return next;
     });
   };
