@@ -323,8 +323,9 @@ function App(){
   const[ganttFull,setGanttFull]=useState(false);
   const[mY,setMY]=useState(()=>new Date().getFullYear());
   const[mM,setMM]=useState(()=>new Date().getMonth()+1);
-  const[pwModal,setPWModal]=useState(null); // {title,onSuccess}
-  const[slideTask,setSlideTask]=useState(null); // 日程スライド対象
+  const[pwModal,setPWModal]=useState(null);
+  const[slideTask,setSlideTask]=useState(null);
+  const[completedOpen,setCompletedOpen]=useState(false); // 完工した工事の展開
 
   const clients     =get("clients");
   const sites       =get("sites");
@@ -332,6 +333,10 @@ function App(){
   const workerMaster=get("workerMaster");
   const attendance  =get("attendance");
   const reports     =get("reports");
+
+  // 稼働中 / 完工済みで分類
+  const activeSites   =useMemo(()=>sites.filter(s=>!s.completed),[sites]);
+  const completedSites=useMemo(()=>sites.filter(s=>s.completed),[sites]);
 
   // ─── ガントスクロール同期 ─────────────────────
   const hRef=useRef(null),bRef=useRef(null),lRef=useRef(null);
@@ -660,7 +665,8 @@ function App(){
           {/* バーエリア */}
           <div style={{flex:1,display:"flex",overflow:"hidden"}}>
             <div ref={lRef} style={{width:LW,flexShrink:0,overflowY:"auto",overflowX:"hidden",background:"#fff",borderRight:"2px solid #E2E8F0"}} onScroll={onScrollL}>
-              {sites.map((s,si)=>{
+              {/* 稼働中現場 */}
+              {activeSites.map((s,si)=>{
                 const cl=clients.find(c=>c.id===s.clientId);
                 const req=reqBySite(s.id,sel);
                 const labelTask=tasks.find(t=>t.siteId===s.id&&sel>=t.start&&sel<=t.end);
@@ -678,10 +684,37 @@ function App(){
                   </div>
                 );
               })}
+              {/* 完工した工事：折りたたみヘッダー */}
+              {completedSites.length>0&&<>
+                <div onClick={()=>setCompletedOpen(o=>!o)}
+                  style={{height:RH,borderBottom:"1px solid #E2E8F0",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:8,borderLeft:"4px solid #94A3B8",background:"#F1F5F9",cursor:"pointer",borderTop:"2px solid #CBD5E1"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{fontSize:12,color:"#64748B"}}>{completedOpen?"▼":"▶"}</span>
+                    <div style={{fontSize:11,fontWeight:700,color:"#64748B"}}>完工した工事</div>
+                    <div style={{background:"#CBD5E1",borderRadius:10,padding:"1px 7px",fontSize:9,color:"#fff",fontWeight:700}}>{completedSites.length}</div>
+                  </div>
+                  <div style={{fontSize:8,color:"#94A3B8",marginTop:1}}>タップで{completedOpen?"閉じる":"展開する"}</div>
+                </div>
+                {completedOpen&&completedSites.map((s,si)=>{
+                  const cl=clients.find(c=>c.id===s.clientId);
+                  const labelTask=tasks.find(t=>t.siteId===s.id&&sel>=t.start&&sel<=t.end);
+                  return(
+                    <div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})}
+                      style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:12,borderLeft:`4px solid ${s.color}66`,background:"#F8FAFC",cursor:"pointer",opacity:.8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        <span style={{fontSize:8,background:"#94A3B8",color:"#fff",borderRadius:3,padding:"1px 4px",fontWeight:700,flexShrink:0}}>完工</span>
+                        <div style={{fontSize:10,fontWeight:700,color:`${s.color}99`,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-40}}>{s.name}</div>
+                      </div>
+                      <div style={{fontSize:8,color:"#94A3B8",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{cl?.name||""}</div>
+                    </div>
+                  );
+                })}
+              </>}
             </div>
             <div ref={bRef} style={{flex:1,overflowX:"auto",overflowY:"auto",background:"#fff"}} onScroll={onScrollB}>
               <div style={{width:days.length*DW,position:"relative"}}>
-                {sites.map((site,si)=>(
+                {/* 稼働中現場バー */}
+                {activeSites.map((site,si)=>(
                   <div key={site.id} style={{height:RH,borderBottom:"1px solid #F1F5F9",background:si%2===0?"#fff":"#FAFBFC",position:"relative"}}>
                     {/* 列背景 */}
                     {days.map((d,i)=>{
@@ -748,6 +781,40 @@ function App(){
                             </div>
                             );
                           })()}
+                        </div>
+                      ));
+                    })}
+                  </div>
+                ))}
+                {/* 完工した工事：グループヘッダー行 */}
+                {completedSites.length>0&&(
+                  <div style={{height:RH,borderBottom:"1px solid #E2E8F0",background:"#F1F5F9",position:"relative",borderTop:"2px solid #CBD5E1",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <span style={{fontSize:11,color:"#94A3B8",fontWeight:700}}>── 完工した工事 ──</span>
+                  </div>
+                )}
+                {/* 完工現場のバー（展開時のみ） */}
+                {completedOpen&&completedSites.map((site,si)=>(
+                  <div key={site.id} style={{height:RH,borderBottom:"1px solid #F1F5F9",background:"#F8FAFC",position:"relative",opacity:.65}}>
+                    {days.map((d,i)=>{
+                      const ds=fmtD(d),dt=dayType(ds);
+                      const bg=dt==="holiday"?"rgba(192,38,211,.03)":dt==="sun"?"rgba(239,68,68,.03)":"transparent";
+                      return(<div key={i} style={{position:"absolute",top:0,bottom:0,left:i*DW,width:DW,borderRight:"1px solid #F8FAFC",background:bg}}/>);
+                    })}
+                    {todayIdx>=0&&<div style={{position:"absolute",top:0,bottom:0,left:todayIdx*DW+DW/2-1,width:2,background:"rgba(249,115,22,.3)",zIndex:3,pointerEvents:"none"}}/>}
+                    {tasks.filter(t=>t.siteId===site.id).map(task=>{
+                      const segs=barSegs(task);if(!segs.length)return null;
+                      return segs.map((seg,si2)=>(
+                        <div key={`${task.id}-${si2}`} className="bar-tap"
+                          onClick={e=>{e.stopPropagation();setSheet({type:"task",task,site});}}
+                          style={{position:"absolute",top:9,height:RH-18,left:seg.left,width:seg.width,
+                            background:seg.skip?"#E2E8F0":`${site.color}88`,
+                            borderRadius:si2===0?segs.length===1?"6px":"6px 0 0 6px":si2===segs.length-1?"0 6px 6px 0":"0",
+                            zIndex:2,overflow:"hidden",cursor:"pointer"}}>
+                          {!seg.skip&&si2===0&&(
+                            <div style={{display:"flex",alignItems:"center",height:"100%",paddingLeft:7,gap:4,overflow:"hidden"}}>
+                              <span style={{fontSize:10,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1}}>{task.name}</span>
+                            </div>
+                          )}
                         </div>
                       ));
                     })}
@@ -1381,8 +1448,14 @@ function App(){
             )},
             {title:"現場一覧",color:"#F97316",items:sites,add:()=>openModal("site","add",{name:"",clientId:clients[0]?.id,capacity:4,color:COLORS[sites.length%COLORS.length]}),row:s=>{
               const cl=clients.find(c=>c.id===s.clientId);
-              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff",borderLeft:`3px solid ${s.color}`}}>
-                <div><div style={{fontSize:13,fontWeight:700,color:s.color}}>{s.name}</div><div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{cl?.name||"─"} / 上限{s.capacity}人</div></div>
+              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":s.color}`}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <div style={{fontSize:13,fontWeight:700,color:s.completed?"#94A3B8":s.color}}>{s.name}</div>
+                    {s.completed&&<span style={{background:"#94A3B8",color:"#fff",borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>完工</span>}
+                  </div>
+                  <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{cl?.name||"─"} / 上限{s.capacity}人</div>
+                </div>
                 <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>);
             }},
@@ -1852,6 +1925,13 @@ function App(){
             <MField label="現場名"><input type="text" value={form.name||""} onChange={e=>setForm({...form,name:e.target.value})} style={IS}/></MField>
             <MField label="上限人数"><input type="number" min={1} value={form.capacity||4} onChange={e=>setForm({...form,capacity:e.target.value})} style={IS}/></MField>
             <MField label="カラー"><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{COLORS.map(c=><div key={c} onClick={()=>setForm({...form,color:c})} style={{width:30,height:30,borderRadius:7,background:c,cursor:"pointer",border:form.color===c?"3px solid #1E293B":"3px solid transparent"}}/>)}</div></MField>
+            <MField label="工事ステータス">
+              <Chk val={!!form.completed}
+                onChange={()=>setForm({...form,completed:!form.completed})}
+                label="完工した工事としてマーク"
+                sub="ガントチャートの最下部に移動します"
+                color="#94A3B8"/>
+            </MField>
             <MBtns onClose={closeModal} onSave={saveSite} saveColor="#F97316"/>
           </>}
 
