@@ -215,7 +215,16 @@ const LS="kms_v2";
 const LS_TS="kms_v2_ts";
 
 function useStore(){
-  const load=()=>{try{const s=localStorage.getItem(LS);if(s)return JSON.parse(s);}catch(_){}return SEED;};
+  // 初回ロード：localStorageにあれば使う、なければSEEDを保存して使う
+  const load=()=>{
+    try{
+      const s=localStorage.getItem(LS);
+      if(s){const d=JSON.parse(s);if(d&&Object.keys(d).length)return d;}
+    }catch(_){}
+    // SEEDをlocalStorageに保存してから返す
+    try{localStorage.setItem(LS,JSON.stringify(SEED));}catch(_){}
+    return SEED;
+  };
   const[store,_set]=useState(load);
   const[syncing,setSyncing]=useState(false);
   const[syncErr,setSyncErr]=useState(null);
@@ -224,7 +233,10 @@ function useStore(){
 
   // ローカル保存
   const saveLocal=useCallback((next)=>{
-    try{localStorage.setItem(LS,JSON.stringify(next));localStorage.setItem(LS_TS,Date.now().toString());}catch(_){}
+    try{
+      localStorage.setItem(LS,JSON.stringify(next));
+      localStorage.setItem(LS_TS,Date.now().toString());
+    }catch(_){}
   },[]);
 
   const setStore=useCallback(fn=>{
@@ -235,7 +247,7 @@ function useStore(){
   const syncUp=useCallback(async(data)=>{
     if(!gasOK())return;
     try{
-      await gasPost("saveAll",data||JSON.parse(localStorage.getItem(LS)||"{}"));
+      await gasPost("saveAll",data);
       setLastSync(nowStr());setSyncErr(null);setSynced(true);
     }catch(e){setSyncErr("送信失敗: "+e.message);}
   },[]);
@@ -248,17 +260,16 @@ function useStore(){
       const d=await gasGet("getAll");
       const hasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
       if(hasData){
-        const next={};
+        const upd={};
         ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-          if(Array.isArray(d[k]))next[k]=d[k];
+          if(Array.isArray(d[k]))upd[k]=d[k];
         });
-        _set(p=>({...p,...next}));
-        saveLocal({...JSON.parse(localStorage.getItem(LS)||"{}"), ...next});
+        setStore(p=>({...p,...upd}));
         setLastSync(nowStr());setSynced(true);setSyncErr(null);
       }
     }catch(e){setSyncErr("取得失敗: "+e.message);}
     finally{setSyncing(false);}
-  },[saveLocal]);
+  },[setStore]);
 
   const pull=syncDown;
   const pushAll=syncUp;
@@ -272,16 +283,15 @@ function useStore(){
         const d=await gasGet("getAll");
         const hasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
         if(hasData){
-          // GASにデータあり → そのまま適用
-          const next={};
+          // GASにデータあり → 適用
+          const upd={};
           ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-            if(Array.isArray(d[k]))next[k]=d[k];
+            if(Array.isArray(d[k]))upd[k]=d[k];
           });
-          _set(p=>({...p,...next}));
-          saveLocal({...JSON.parse(localStorage.getItem(LS)||"{}"), ...next});
+          setStore(p=>({...p,...upd}));
           setLastSync(nowStr());setSynced(true);
         } else {
-          // GASが空 → ローカルをGASへ送信
+          // GASが空 → 現在のstoreをGASへ送信
           const snap=JSON.parse(localStorage.getItem(LS)||"{}");
           if(Object.values(snap).some(v=>Array.isArray(v)&&v.length>0)){
             await gasPost("saveAll",snap);
@@ -309,12 +319,13 @@ function useStore(){
   },[syncDown]);
 
   const get=k=>store[k]||[];
-  // set: ローカル保存 → 全データをGASへ送信
+  // set: Reactのstore stateをベースに更新（localStorageの読み直し不要）
   const set=(k,v)=>{
-    const next={...JSON.parse(localStorage.getItem(LS)||"{}"), [k]:v};
-    _set(p=>({...p,[k]:v}));
-    saveLocal(next);
-    syncUp(next); // 全量送信
+    setStore(prev=>{
+      const next={...prev,[k]:v};
+      syncUp(next); // 全量GAS送信
+      return next;
+    });
   };
   return{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore};
 }
