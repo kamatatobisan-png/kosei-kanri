@@ -305,17 +305,28 @@ function useStore(){
       try{
         const d=await gasGet("getAll");
         const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
+        // ローカルが未変更（LS_TSが存在しない＝SEED状態）かどうか判定
+        const isFirstDevice=!localStorage.getItem(LS_TS);
         if(gasHasData){
-          // GASにデータあり → IDベースマージ（ローカル優先）
-          setStore(p=>{
-            const next={...p};
+          if(isFirstDevice){
+            // 初回端末 → GASデータをそのまま使用（SEEDと混在させない）
+            const next={};
             ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-              if(Array.isArray(d[k])&&d[k].length>0){
-                next[k]=mergeById(p[k]||[],d[k]);
-              }
+              if(Array.isArray(d[k]))next[k]=d[k];
             });
-            return next;
-          });
+            setStore(p=>({...p,...next}));
+          } else {
+            // 既存端末 → IDベースマージ（ローカル優先）
+            setStore(p=>{
+              const next={...p};
+              ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+                if(Array.isArray(d[k])&&d[k].length>0){
+                  next[k]=mergeById(p[k]||[],d[k]);
+                }
+              });
+              return next;
+            });
+          }
           setSynced(true);setLastSync(nowStr());
         } else {
           // GASが空 → ローカルを送信
