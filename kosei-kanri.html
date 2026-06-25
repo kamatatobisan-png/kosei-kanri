@@ -338,8 +338,14 @@ function App(){
   const reports     =get("reports");
 
   // 稼働中 / 完工済みで分類
-  const activeSites   =useMemo(()=>sites.filter(s=>!s.completed),[sites]);
-  const completedSites=useMemo(()=>sites.filter(s=>s.completed),[sites]);
+  const activeSites   =useMemo(()=>{
+    const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
+    return sites.filter(s=>!s.completed).sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+  },[sites,clients]);
+  const completedSites=useMemo(()=>{
+    const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
+    return sites.filter(s=>s.completed).sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
+  },[sites,clients]);
 
   // ─── ガントスクロール同期 ─────────────────────
   const hRef=useRef(null),bRef=useRef(null),lRef=useRef(null);
