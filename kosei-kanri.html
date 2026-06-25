@@ -337,13 +337,6 @@ function App(){
   const attendance  =get("attendance");
   const reports     =get("reports");
 
-  // 設定タブ用：現場を色順→完工順でソート
-  const sortedSites=useMemo(()=>{
-    const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>a.color.localeCompare(b.color));
-    const done  =[...sites.filter(s=> s.completed)].sort((a,b)=>a.color.localeCompare(b.color));
-    return[...active,...done];
-  },[sites]);
-
   // 稼働中 / 完工済みで分類
   const activeSites   =useMemo(()=>sites.filter(s=>!s.completed),[sites]);
   const completedSites=useMemo(()=>sites.filter(s=>s.completed),[sites]);
@@ -1229,7 +1222,7 @@ function App(){
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <div style={{fontFamily:"'Oswald',sans-serif",fontSize:18,color:"#F97316",letterSpacing:".06em"}}>月次集計</div>
-              {!admin.isAdmin&&<button onClick={()=>setPWModal({title:"月次集計の編集には管理者権限が必要です",onSuccess:()=>{admin.login("_skip");setPWModal(null);}})} style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:6,padding:"4px 10px",fontSize:11,color:"#64748B",cursor:"pointer"}}>🔐 管理者ログイン</button>}
+              {!admin.isAdmin&&<button onClick={()=>setPWModal({title:"月次集計の編集には管理者権限が必要です",onSuccess:()=>{setPWModal(null);}})} style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:6,padding:"4px 10px",fontSize:11,color:"#64748B",cursor:"pointer"}}>🔐 管理者ログイン</button>}
               {admin.isAdmin&&<button onClick={admin.logout} style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:6,padding:"4px 10px",fontSize:11,color:"#16A34A",cursor:"pointer"}}>ログアウト</button>}
             </div>
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -1517,7 +1510,7 @@ function App(){
                 const rows=[];let lastCo=null;
                 sortedItems.forEach(w=>{
                   if(w.company!==lastCo){rows.push({type:"header",label:w.company||"─",completed:false});lastCo=w.company;}
-                  rows.push({type:"site",site:w});
+                  rows.push({type:"item",site:w});
                 });
                 return rows;
               },
@@ -1549,7 +1542,7 @@ function App(){
                             <span style={{fontSize:10,color:"#94A3B8",fontWeight:700}}>✓ 完工した工事</span>
                           </div>
                         );
-                        return sec.row(row.site);  // site を直接渡す
+                        return sec.row(row.site);
                       })
                     : (sec.sortedItems||sec.items).map(sec.row)
                 }
