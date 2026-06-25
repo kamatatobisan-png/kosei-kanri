@@ -215,12 +215,8 @@ const LS="kms_v2";
 const LS_TS="kms_v2_ts";
 
 function useStore(){
-  // 初回ロード：localStorageにあれば使う、なければSEEDを保存して使う
   const load=()=>{
-    try{
-      const s=localStorage.getItem(LS);
-      if(s){const d=JSON.parse(s);if(d&&Object.keys(d).length)return d;}
-    }catch(_){}
+    try{const s=localStorage.getItem(LS);if(s){const d=JSON.parse(s);if(d&&Object.keys(d).length)return d;}}catch(_){}
     try{localStorage.setItem(LS,JSON.stringify(SEED));}catch(_){}
     return SEED;
   };
@@ -230,19 +226,25 @@ function useStore(){
   const[lastSync,setLastSync]=useState(null);
   const[synced,setSynced]=useState(false);
 
-  // ローカル保存（タイムスタンプ更新）
-  const saveLocal=useCallback((next)=>{
+  // ユーザーが変更したときだけLS_TSを更新
+  const saveLocalUser=useCallback((next)=>{
     try{
       localStorage.setItem(LS,JSON.stringify(next));
       localStorage.setItem(LS_TS,Date.now().toString());
     }catch(_){}
   },[]);
 
-  const setStore=useCallback(fn=>{
-    _set(prev=>{const next=typeof fn==="function"?fn(prev):fn;saveLocal(next);return next;});
-  },[saveLocal]);
+  // GASデータ適用時はLS_TSを更新しない（ユーザー変更ではないため）
+  const saveLocalGAS=useCallback((next)=>{
+    try{localStorage.setItem(LS,JSON.stringify(next));}catch(_){}
+  },[]);
 
-  // GASへ全データ送信（タイムスタンプ付き）
+  // ユーザー操作からのsetStore（LS_TS更新あり）
+  const setStore=useCallback(fn=>{
+    _set(prev=>{const next=typeof fn==="function"?fn(prev):fn;saveLocalUser(next);return next;});
+  },[saveLocalUser]);
+
+  // GASへ全データ送信
   const syncUp=useCallback(async(data)=>{
     if(!gasOK())return;
     const ts=parseInt(localStorage.getItem(LS_TS)||"0");
@@ -252,29 +254,30 @@ function useStore(){
     }catch(e){setSyncErr("送信失敗: "+e.message);}
   },[]);
 
-  // GASからデータ取得してローカルを置き換え（強制）
-  const syncDown=useCallback(async()=>{
+  // GASデータをローカルに適用（LS_TS更新なし）
+  const applyGAS=useCallback((d)=>{
+    const upd={};
+    ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
+      if(Array.isArray(d[k]))upd[k]=d[k];
+    });
+    _set(p=>{const next={...p,...upd};saveLocalGAS(next);return next;});
+    setLastSync(nowStr());setSynced(true);setSyncErr(null);
+  },[saveLocalGAS]);
+
+  // 手動pull（強制取得ボタン用）
+  const pull=useCallback(async()=>{
     if(!gasOK())return;
     setSyncing(true);setSyncErr(null);
     try{
       const d=await gasGet("getAll");
-      const hasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
-      if(hasData){
-        const upd={};
-        ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-          if(Array.isArray(d[k]))upd[k]=d[k];
-        });
-        setStore(p=>({...p,...upd}));
-        setLastSync(nowStr());setSynced(true);setSyncErr(null);
-      }
+      if(d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0))applyGAS(d);
     }catch(e){setSyncErr("取得失敗: "+e.message);}
     finally{setSyncing(false);}
-  },[setStore]);
+  },[applyGAS]);
 
-  const pull=syncDown;
   const pushAll=syncUp;
 
-  // ── 起動時：タイムスタンプ比較で新しい方を使う ──
+  // 起動時：タイムスタンプ比較
   useEffect(()=>{
     if(!gasOK())return;
     (async()=>{
@@ -284,34 +287,19 @@ function useStore(){
         const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
         const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
         const gasTS=parseInt(d?._ts||"0");
-        const isNewDevice=localTS===0; // 一度も保存したことがない端末
 
         if(!gasHasData){
           // GASが空 → ローカルをGASへ送信
           const snap=JSON.parse(localStorage.getItem(LS)||"{}");
           if(Object.values(snap).some(v=>Array.isArray(v)&&v.length>0)){
-            const ts=parseInt(localStorage.getItem(LS_TS)||Date.now().toString());
-            await gasPost("saveAll",{...snap,_ts:ts});
+            await gasPost("saveAll",{...snap,_ts:localTS||Date.now()});
             setLastSync(nowStr());setSynced(true);
           }
-        } else if(isNewDevice){
-          // 新規端末 → GASデータをそのまま使用
-          const upd={};
-          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-            if(Array.isArray(d[k]))upd[k]=d[k];
-          });
-          setStore(p=>({...p,...upd}));
-          setLastSync(nowStr());setSynced(true);
-        } else if(gasTS>localTS){
-          // GASの方が新しい → GASを適用
-          const upd={};
-          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-            if(Array.isArray(d[k]))upd[k]=d[k];
-          });
-          setStore(p=>({...p,...upd}));
-          setLastSync(nowStr());setSynced(true);
+        } else if(gasTS>=localTS){
+          // GASが新しいかTS同等 → GASを適用（LS_TS更新なし）
+          applyGAS(d);
         } else {
-          // ローカルの方が新しい → ローカルをGASへ送信
+          // ローカルが新しい → GASへ送信
           const snap=JSON.parse(localStorage.getItem(LS)||"{}");
           await gasPost("saveAll",{...snap,_ts:localTS});
           setLastSync(nowStr());setSynced(true);
@@ -321,61 +309,35 @@ function useStore(){
     })();
   },[]);
 
-  // 30秒ごと自動pull（GASが新しければ適用）
-  useEffect(()=>{
-    if(!gasOK())return;
-    const id=setInterval(async()=>{
-      if(document.hidden)return;
-      try{
-        const d=await gasGet("getAll");
-        const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
-        if(!gasHasData)return;
-        const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
-        const gasTS=parseInt(d?._ts||"0");
-        if(gasTS>localTS){
-          // GASが新しければ適用
-          const upd={};
-          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-            if(Array.isArray(d[k]))upd[k]=d[k];
-          });
-          setStore(p=>({...p,...upd}));
-          setLastSync(nowStr());
-        }
-      }catch(_){}
-    },30000);
-    return()=>clearInterval(id);
-  },[setStore]);
+  // 30秒ごと・タブ復帰時：GASが新しければ適用
+  const pollGAS=useCallback(async()=>{
+    if(!gasOK()||document.hidden)return;
+    try{
+      const d=await gasGet("getAll");
+      if(!d||!Object.values(d).some(v=>Array.isArray(v)&&v.length>0))return;
+      const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+      const gasTS=parseInt(d?._ts||"0");
+      if(gasTS>localTS)applyGAS(d); // GASが新しければ適用（LS_TS更新なし）
+    }catch(_){}
+  },[applyGAS]);
 
-  // タブ復帰時も同様
   useEffect(()=>{
     if(!gasOK())return;
-    const fn=async()=>{
-      if(document.hidden)return;
-      try{
-        const d=await gasGet("getAll");
-        const gasHasData=d&&Object.values(d).some(v=>Array.isArray(v)&&v.length>0);
-        if(!gasHasData)return;
-        const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
-        const gasTS=parseInt(d?._ts||"0");
-        if(gasTS>localTS){
-          const upd={};
-          ["clients","sites","tasks","workerMaster","attendance","reports"].forEach(k=>{
-            if(Array.isArray(d[k]))upd[k]=d[k];
-          });
-          setStore(p=>({...p,...upd}));
-          setLastSync(nowStr());
-        }
-      }catch(_){}
-    };
-    document.addEventListener("visibilitychange",fn);
-    return()=>document.removeEventListener("visibilitychange",fn);
-  },[setStore]);
+    const id=setInterval(pollGAS,30000);
+    return()=>clearInterval(id);
+  },[pollGAS]);
+
+  useEffect(()=>{
+    if(!gasOK())return;
+    document.addEventListener("visibilitychange",pollGAS);
+    return()=>document.removeEventListener("visibilitychange",pollGAS);
+  },[pollGAS]);
 
   const get=k=>store[k]||[];
   const set=(k,v)=>{
-    setStore(prev=>{
+    setStore(prev=>{       // ← saveLocalUser経由でLS_TSを更新
       const next={...prev,[k]:v};
-      syncUp(next);
+      syncUp(next);        // 全量GAS送信
       return next;
     });
   };
