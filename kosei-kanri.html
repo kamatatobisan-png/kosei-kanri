@@ -1451,9 +1451,15 @@ function App(){
           <div style={{fontFamily:"'Oswald',sans-serif",fontSize:18,color:"#F97316",letterSpacing:".06em",marginBottom:14}}>設定・マスタ管理</div>
 
           {[
-            {title:"元請け会社",color:"#3B82F6",items:clients,add:()=>openModal("client","add",{name:""}),row:cl=>(
+            {title:"元請け会社",color:"#3B82F6",items:clients,
+              sortedItems:useMemo(()=>[...clients].sort((a,b)=>a.name.localeCompare(b.name,"ja")),[clients]),
+              add:()=>openModal("client","add",{name:""}),row:cl=>(
               <div key={cl.id} className="row" onClick={()=>openModal("client","edit",{...cl})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
-                <span style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{cl.name}</span><span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
+                <div>
+                  <span style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{cl.name}</span>
+                  <span style={{fontSize:10,color:"#94A3B8",marginLeft:8}}>{sites.filter(s=>s.clientId===cl.id).length}現場</span>
+                </div>
+                <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>
             )},
             {title:"現場一覧",color:"#F97316",items:sites,
@@ -1466,41 +1472,54 @@ function App(){
               add:()=>openModal("site","add",{name:"",clientId:clients[0]?.id,capacity:4,color:COLORS[sites.length%COLORS.length]}),
               // 元請け会社ごとにグループヘッダーを挿入するためrowsを生成
               rowsWithHeader:(sortedItems)=>{
-                const rows=[];let lastClient=null;let lastCompleted=null;
+                const rows=[];let lastClient=null;let lastCompleted=false;
                 sortedItems.forEach(s=>{
                   const cl=clients.find(c=>c.id===s.clientId);
                   const clName=cl?.name||"─";
-                  // 完工セパレーター
-                  if(s.completed&&lastCompleted===false){
+                  // 完工セパレーター（稼働→完工の切り替わり時）
+                  if(s.completed&&!lastCompleted){
                     rows.push({type:"sep_completed"});
-                    lastClient=null;
+                    lastClient=null; // 元請けヘッダーをリセット
                   }
                   // 元請けグループヘッダー
                   if(clName!==lastClient){
-                    rows.push({type:"header",label:clName,completed:s.completed});
+                    rows.push({type:"header",label:clName,completed:!!s.completed});
                     lastClient=clName;
                   }
-                  rows.push({type:"site",site:s,cl});
+                  rows.push({type:"site",site:s});
                   lastCompleted=!!s.completed;
                 });
                 return rows;
               },
               row:s=>{
               const cl=clients.find(c=>c.id===s.clientId);
+              const taskCnt=tasks.filter(t=>t.siteId===s.id).length;
               return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:s.completed?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":s.color}`}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
                     <div style={{fontSize:13,fontWeight:700,color:s.completed?"#94A3B8":s.color}}>{s.name}</div>
                     {s.completed&&<span style={{background:"#94A3B8",color:"#fff",borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>完工</span>}
+                    {taskCnt>0&&<span style={{background:s.completed?"#E2E8F0":`${s.color}22`,color:s.completed?"#94A3B8":s.color,borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>{taskCnt}工程</span>}
                   </div>
-                  <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{cl?.name||"─"} / 上限{s.capacity}人</div>
+                  <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>上限{s.capacity}人</div>
                 </div>
                 <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>);
             }},
-            {title:"作業員マスタ",color:"#16A34A",items:workerMaster,add:()=>openModal("workerM","add",{name:"",company:"",note:""}),row:w=>(
+            {title:"作業員マスタ",color:"#16A34A",items:workerMaster,
+              sortedItems:useMemo(()=>[...workerMaster].sort((a,b)=>a.company.localeCompare(b.company,"ja")||(a.name.localeCompare(b.name,"ja"))),[workerMaster]),
+              rowsWithHeader:(sortedItems)=>{
+                const rows=[];let lastCo=null;
+                sortedItems.forEach(w=>{
+                  if(w.company!==lastCo){rows.push({type:"header",label:w.company||"─",completed:false});lastCo=w.company;}
+                  rows.push({type:"site",site:w});
+                });
+                return rows;
+              },
+              add:()=>openModal("workerM","add",{name:"",company:"",note:""}),
+              row:w=>(
               <div key={w.id} className="row" onClick={()=>openModal("workerM","edit",{...w})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
-                <div><div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{w.name}</div><div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{w.company}{w.note?` — ${w.note}`:""}</div></div>
+                <div><div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{w.name}</div>{w.note&&<div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{w.note}</div>}</div>
                 <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>
             )},
@@ -1525,7 +1544,7 @@ function App(){
                             <span style={{fontSize:10,color:"#94A3B8",fontWeight:700}}>✓ 完工した工事</span>
                           </div>
                         );
-                        return sec.row(row.site);
+                        return sec.row(row.site);  // site を直接渡す
                       })
                     : (sec.sortedItems||sec.items).map(sec.row)
                 }
