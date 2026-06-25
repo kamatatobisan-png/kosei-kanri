@@ -32,7 +32,7 @@ const{useState,useRef,useEffect,useMemo,useCallback}=React;
 // ═══════════════════════════════════════════════════
 // GAS URL
 // ═══════════════════════════════════════════════════
-const GAS_URL="https://script.google.com/macros/s/AKfycbweS-WEkkCd-1jjXhWdAcR3sr1GFawu-f5OUjvSrzNoYtTnZl4bN5vQU7niKEDMeewZmA/exec";
+const GAS_URL="https://script.google.com/macros/s/AKfycbzW2Ns-w45MOlXWW2UgqJnZXLweE7AVlEPqkJwhcKb2NPku5lXesXrJTQZZmIKYbi0O/exec";
 
 // ─── 定数 ────────────────────────────────────────
 const DW=42,RH=50,LW=96;
@@ -381,40 +381,47 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
   const doTest=async()=>{
     setTesting(true);setLog([]);
     addLog("🔍 GAS接続テスト開始...","info");
+    addLog(`URL: ${GAS_URL.slice(0,60)}...`,"info");
     try{
-      // 1. GASからデータ取得
-      addLog("① GASからデータ取得中...","info");
-      const d=await gasGet("getAll");
-      const keys=Object.keys(d||{});
-      if(!keys.length){addLog("⚠ GASにデータなし（AppDataシートが空）","warn");}
+      // 生のfetchで詳細確認
+      addLog("① GASへGETリクエスト送信中...","info");
+      const res=await fetch(`${GAS_URL}?action=getAll`,{mode:"cors"});
+      addLog(`  HTTPステータス: ${res.status} ${res.statusText}`,"info");
+      const text=await res.text();
+      addLog(`  レスポンス冒頭: ${text.slice(0,80)}`,"info");
+      let d;
+      try{d=JSON.parse(text);}catch(e){addLog("✗ JSONパース失敗: "+e.message+"\n  → GASが正しく動いていない可能性","error");setTesting(false);return;}
+      if(!d.ok){addLog("✗ GASエラー: "+d.error,"error");setTesting(false);return;}
+      addLog("② GAS接続OK ✅","ok");
+      // データ確認
+      const data=d.data||{};
+      const keys=Object.keys(data);
+      if(!keys.length){addLog("⚠ AppDataシートが空 → 📤送信が必要","warn");}
       else{
         keys.forEach(k=>{
-          const v=d[k];
-          addLog(`  ${k}: ${Array.isArray(v)?v.length+"件":"存在"}`,Array.isArray(v)&&v.length>0?"ok":"warn");
+          if(k==="reports"||k==="_ts")return;
+          const v=data[k];
+          addLog(`  ${k}: ${Array.isArray(v)?v.length+"件":String(v).slice(0,30)}`,Array.isArray(v)&&v.length>0?"ok":"warn");
         });
-        // 完工現場チェック
-        const completedSites=(d.sites||[]).filter(s=>s.completed);
-        addLog(`  完工現場: ${completedSites.length}件 ${completedSites.map(s=>s.name).join(", ")}`,completedSites.length>0?"ok":"warn");
+        addLog(`  _ts(GASタイムスタンプ): ${data._ts||"なし"}`,data._ts?"ok":"warn");
       }
-      addLog("② GAS接続OK ✅","ok");
-
-      // 2. ローカルデータ確認
-      addLog("③ ローカルデータ確認...","info");
-      const local=JSON.parse(localStorage.getItem(LS)||"{}");
-      const localCompleted=(local.sites||[]).filter(s=>s.completed);
-      addLog(`  ローカル完工現場: ${localCompleted.length}件`,localCompleted.length>0?"ok":"warn");
-      addLog(`  ローカル現場数: ${(local.sites||[]).length}件`,"info");
-
-      // 3. 差異チェック
-      const gasCompleted=(d.sites||[]).filter(s=>s.completed).length;
-      if(localCompleted.length!==gasCompleted){
-        addLog(`⚠ 差異あり: ローカル${localCompleted.length}件 vs GAS${gasCompleted}件 → 送信推奨`,"warn");
-      } else {
-        addLog("✅ ローカルとGASのデータが一致","ok");
-      }
+      // ローカルとの比較
+      const localTS=parseInt(localStorage.getItem(LS_TS)||"0");
+      const gasTS=parseInt(data._ts||"0");
+      addLog(`③ ローカルTS: ${localTS||"未設定"}`,"info");
+      addLog(`   GAS TS: ${gasTS||"未設定"}`,"info");
+      if(!localTS&&!gasTS)addLog("→ 両方未設定：📤送信で初回同期してください","warn");
+      else if(gasTS>=localTS)addLog("→ GASが新しい：起動時にGASデータを使用","ok");
+      else addLog("→ ローカルが新しい：起動時にGASへ送信","ok");
+      // 完工現場チェック
+      const comp=(data.sites||[]).filter(s=>s.completed);
+      addLog(`④ 完工現場: ${comp.length}件 ${comp.map(s=>s.name).join(", ")||"なし"}`,comp.length>0?"ok":"info");
     }catch(e){
-      addLog("✗ GAS接続エラー: "+e.message,"error");
-      addLog("→ GASの再デプロイが必要な可能性があります","warn");
+      addLog("✗ 接続エラー: "+e.message,"error");
+      addLog("考えられる原因:","warn");
+      addLog("  ・GASが新しいバージョンでデプロイされていない","warn");
+      addLog("  ・SS_IDが設定されていない","warn");
+      addLog("  ・ネットワーク/CORS問題","warn");
     }
     setTesting(false);
   };
