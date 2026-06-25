@@ -480,6 +480,18 @@ function App(){
   // ─── 計算 ─────────────────────────────────────
   // 設定タブ用ソート済みリスト（useMemoをコンポーネントトップレベルで定義）
   const sortedClients=useMemo(()=>[...clients].sort((a,b)=>a.name.localeCompare(b.name,"ja")),[clients]);
+
+  // 元請会社ごとに自動カラー割り当て（重複なし）
+  // clients配列の順番でCOLORSを割り当て、同じ元請の現場は同じ色
+  const clientColorMap=useMemo(()=>{
+    const map={};
+    clients.forEach((cl,i)=>{map[cl.id]=COLORS[i%COLORS.length];});
+    return map;
+  },[clients]);
+  const siteColor=useCallback((site)=>{
+    if(!site)return"#94A3B8";
+    return clientColorMap[site.clientId]||site.color||"#94A3B8";
+  },[clientColorMap]);
   const sortedSites  =useMemo(()=>{
     const getName=s=>{const cl=clients.find(c=>c.id===s.clientId);return cl?.name||"";};
     const active=[...sites.filter(s=>!s.completed)].sort((a,b)=>getName(a).localeCompare(getName(b),"ja"));
@@ -803,11 +815,11 @@ function App(){
                   <div key={s.id} className="row" onClick={()=>{
                     if(labelTask)setSheet({type:"task",task:labelTask,site:s});
                     else openModal("task","add",{siteId:s.id,name:"",start:sel,end:sel,workers:1,memo:"",note:"",isContract:false,plannedManDays:0,progressNote:""});
-                  }} style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:8,borderLeft:`4px solid ${s.color}`,background:si%2===0?"#fff":"#FAFBFC",cursor:"pointer"}}>
-                    <div style={{fontSize:11,fontWeight:700,color:s.color,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{s.name}</div>
+                  }} style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:8,borderLeft:`4px solid ${siteColor(s)}`,background:si%2===0?"#fff":"#FAFBFC",cursor:"pointer"}}>
+                    <div style={{fontSize:11,fontWeight:700,color:siteColor(s),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{s.name}</div>
                     <div style={{fontSize:9,color:"#94A3B8",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{cl?.name||""}</div>
                     {labelTask
-                      ?<div style={{fontSize:9,fontWeight:700,color:s.color,marginTop:1}}>{labelTask.name} {req>0?`${req}人`:""}</div>
+                      ?<div style={{fontSize:9,fontWeight:700,color:siteColor(s),marginTop:1}}>{labelTask.name} {req>0?`${req}人`:""}</div>
                       :<div style={{fontSize:8,color:"#CBD5E1",marginTop:1}}>＋ 工程を追加</div>
                     }
                   </div>
@@ -829,10 +841,10 @@ function App(){
                   const labelTask=tasks.find(t=>t.siteId===s.id&&sel>=t.start&&sel<=t.end);
                   return(
                     <div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})}
-                      style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:12,borderLeft:`4px solid ${s.color}66`,background:"#F8FAFC",cursor:"pointer",opacity:.8}}>
+                      style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:12,borderLeft:`4px solid ${siteColor(s)}66`,background:"#F8FAFC",cursor:"pointer",opacity:.8}}>
                       <div style={{display:"flex",alignItems:"center",gap:4}}>
                         <span style={{fontSize:8,background:"#94A3B8",color:"#fff",borderRadius:3,padding:"1px 4px",fontWeight:700,flexShrink:0}}>完工</span>
-                        <div style={{fontSize:10,fontWeight:700,color:`${s.color}99`,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-40}}>{s.name}</div>
+                        <div style={{fontSize:10,fontWeight:700,color:`${siteColor(s)}99`,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-40}}>{s.name}</div>
                       </div>
                       <div style={{fontSize:8,color:"#94A3B8",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{cl?.name||""}</div>
                     </div>
@@ -887,10 +899,10 @@ function App(){
                         <div key={`${task.id}-${si2}`} className="bar-tap"
                           onClick={e=>{e.stopPropagation();setSheet({type:"task",task,site});}}
                           style={{position:"absolute",top:9,height:RH-18,left:seg.left,width:seg.width,
-                            background:seg.skip?"#E2E8F0":site.color,
+                            background:seg.skip?"#E2E8F0":siteColor(site),
                             borderRadius:si2===0?segs.length===1?"6px":"6px 0 0 6px":si2===segs.length-1?"0 6px 6px 0":"0",
                             zIndex:2,overflow:"hidden",cursor:"pointer",
-                            boxShadow:seg.skip?"none":`0 1px 5px ${site.color}44`,
+                            boxShadow:seg.skip?"none":`0 1px 5px ${siteColor(site)}44`,
                             opacity:seg.skip?.35:1,
                             backgroundImage:seg.skip?"repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 6px)":"none"}}>
                           {!seg.skip&&si2===0&&(()=>{
@@ -936,7 +948,7 @@ function App(){
                         <div key={`${task.id}-${si2}`} className="bar-tap"
                           onClick={e=>{e.stopPropagation();setSheet({type:"task",task,site});}}
                           style={{position:"absolute",top:9,height:RH-18,left:seg.left,width:seg.width,
-                            background:seg.skip?"#E2E8F0":`${site.color}88`,
+                            background:seg.skip?"#E2E8F0":`${siteColor(site)}88`,
                             borderRadius:si2===0?segs.length===1?"6px":"6px 0 0 6px":si2===segs.length-1?"0 6px 6px 0":"0",
                             zIndex:2,overflow:"hidden",cursor:"pointer"}}>
                           {!seg.skip&&si2===0&&(
@@ -1046,11 +1058,11 @@ function App(){
                 const sig=sigOnDay(sel);
                 const pct=req?Math.min(100,Math.round(req/(site.capacity||8)*100)):0;
                 return(
-                  <div key={site.id} style={{background:"#fff",borderRadius:7,marginBottom:4,border:`1px solid ${req?site.color+"33":"#F1F5F9"}`,overflow:"hidden"}}>
+                  <div key={site.id} style={{background:"#fff",borderRadius:7,marginBottom:4,border:`1px solid ${req?siteColor(site)+"33":"#F1F5F9"}`,overflow:"hidden"}}>
                     <div style={{padding:"5px 7px"}}>
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                         <div style={{display:"flex",alignItems:"center",gap:4,flex:1,minWidth:0}}>
-                          <div style={{width:6,height:6,borderRadius:2,background:site.color,flexShrink:0}}/>
+                          <div style={{width:6,height:6,borderRadius:2,background:siteColor(site),flexShrink:0}}/>
                           <div style={{fontSize:10,fontWeight:700,color:req?"#1E293B":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{site.name}</div>
                         </div>
                         <span style={{fontFamily:"'Oswald',sans-serif",fontSize:15,fontWeight:700,color:req?sigColor(sig):"#CBD5E1",flexShrink:0}}>{req||"─"}<span style={{fontSize:8}}>人</span></span>
@@ -1137,12 +1149,12 @@ function App(){
               const sig=sigOnDay(sel);
               const pct=req?Math.min(100,Math.round(req/(site.capacity||8)*100)):0;
               return(
-                <div key={site.id} style={{background:"#fff",borderRadius:9,marginBottom:6,border:`1px solid ${req?site.color+"33":"#F1F5F9"}`,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+                <div key={site.id} style={{background:"#fff",borderRadius:9,marginBottom:6,border:`1px solid ${req?siteColor(site)+"33":"#F1F5F9"}`,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
                   <div style={{padding:"7px 9px"}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:1}}>
-                          <div style={{width:7,height:7,borderRadius:2,background:site.color,flexShrink:0}}/>
+                          <div style={{width:7,height:7,borderRadius:2,background:siteColor(site),flexShrink:0}}/>
                           <div style={{fontSize:11,fontWeight:700,color:req?"#1E293B":"#CBD5E1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{site.name}</div>
                         </div>
                         {task&&<div style={{fontSize:9,color:"#94A3B8",paddingLeft:12}}>{task.name}</div>}
@@ -1356,8 +1368,8 @@ function App(){
           <SH title="現場別" csvFn={()=>{const r=[["現場名","日報件数","稼働日数","延べ人工"]];bySite.forEach(s=>r.push([s.name,s.cnt,s.dayCnt,s.workers]));dlCSV(`現場別_${mY}${Z(mM)}.csv`,r);}}>
             {bySite.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>データなし</div>
             :bySite.map((s,i)=>(
-              <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 52px 52px 60px",padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",alignItems:"center",gap:4,borderLeft:`3px solid ${s.color}`}}>
-                <span style={{fontSize:12,fontWeight:700,color:s.color}}>{s.name}</span>
+              <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 52px 52px 60px",padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",alignItems:"center",gap:4,borderLeft:`3px solid ${siteColor(s)}`}}>
+                <span style={{fontSize:12,fontWeight:700,color:siteColor(s)}}>{s.name}</span>
                 <span style={{fontSize:11,color:"#64748B",textAlign:"center"}}>{s.cnt}件</span>
                 <span style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:"#3B82F6",textAlign:"center"}}>{s.dayCnt}<span style={{fontSize:9}}>日</span></span>
                 <span style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:"#F97316",textAlign:"center"}}>{s.workers}<span style={{fontSize:9}}>人工</span></span>
@@ -1408,8 +1420,8 @@ function App(){
           <SH title="現場別 常用・請負人数" csvFn={()=>{const r=[["現場名","常用（延べ人数）","請負（延べ人数）"]];bySiteJobType.forEach(s=>r.push([s.name,s.regular,s.contract]));dlCSV(`工事種別_${mY}${Z(mM)}.csv`,r);}}>
             {bySiteJobType.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>データなし</div>
             :bySiteJobType.map((s,i)=>(
-              <div key={s.siteId} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",alignItems:"center",gap:4,borderLeft:`3px solid ${s.color}`}}>
-                <span style={{fontSize:12,fontWeight:700,color:s.color}}>{s.name}</span>
+              <div key={s.siteId} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",alignItems:"center",gap:4,borderLeft:`3px solid ${siteColor(s)}`}}>
+                <span style={{fontSize:12,fontWeight:700,color:siteColor(s)}}>{s.name}</span>
                 <div style={{textAlign:"center"}}>
                   <div style={{fontSize:8,color:"#2563EB",marginBottom:1}}>常用</div>
                   <span style={{fontFamily:"'Oswald',sans-serif",fontSize:16,color:"#2563EB"}}>{s.regular}<span style={{fontSize:9}}>人</span></span>
@@ -1426,8 +1438,8 @@ function App(){
           <SH title="現場別 搬出入車両" csvFn={()=>{const r=[["現場名","常用/請負","車両サイズ","台数"]];bySiteVehicle.forEach(s=>{Object.entries(s.vehicles).forEach(([k,cnt])=>{const[ct,sz]=k.split("_");r.push([s.name,ct,sz+"車",cnt]);});});dlCSV(`車両_${mY}${Z(mM)}.csv`,r);}}>
             {bySiteVehicle.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>データなし</div>
             :bySiteVehicle.map((s,i)=>(
-              <div key={s.siteId} style={{padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.color}`}}>
-                <div style={{fontSize:12,fontWeight:700,color:s.color,marginBottom:5}}>{s.name}</div>
+              <div key={s.siteId} style={{padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",borderLeft:`3px solid ${siteColor(s)}`}}>
+                <div style={{fontSize:12,fontWeight:700,color:siteColor(s),marginBottom:5}}>{s.name}</div>
                 {Object.keys(s.vehicles).length===0?<span style={{fontSize:11,color:"#CBD5E1"}}>なし</span>
                 :<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
                   {Object.entries(s.vehicles).map(([k,cnt])=>{const[ct,sz]=k.split("_");return(
@@ -1449,8 +1461,8 @@ function App(){
           <SH title="現場別 インシデント一覧 🔐" csvFn={()=>{const r=[["現場名","日付","内容"]];bySiteIncident.forEach(s=>s.incidents.forEach(inc=>r.push([s.name,inc.date,inc.text])));dlCSV(`インシデント_${mY}${Z(mM)}.csv`,r);}}>
             {bySiteIncident.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>インシデントなし</div>
             :bySiteIncident.map((s,i)=>(
-              <div key={s.siteId} style={{padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.color}`}}>
-                <div style={{fontSize:12,fontWeight:700,color:s.color,marginBottom:5}}>{s.name}</div>
+              <div key={s.siteId} style={{padding:"9px 12px",borderBottom:"1px solid #F1F5F9",background:i%2===1?"#FAFBFC":"#fff",borderLeft:`3px solid ${siteColor(s)}`}}>
+                <div style={{fontSize:12,fontWeight:700,color:siteColor(s),marginBottom:5}}>{s.name}</div>
                 {s.incidents.map((inc,j)=>(
                   <div key={j} style={{display:"flex",gap:8,marginBottom:4}}>
                     <span style={{fontSize:10,color:"#94A3B8",flexShrink:0,marginTop:1}}>{inc.date.slice(5).replace("-","/")}</span>
@@ -1608,12 +1620,12 @@ function App(){
               row:s=>{
               const cl=clients.find(c=>c.id===s.clientId);
               const taskCnt=tasks.filter(t=>t.siteId===s.id).length;
-              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:s.completed?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":s.color}`}}>
+              return(<div key={s.id} className="row" onClick={()=>openModal("site","edit",{...s})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:s.completed?"#FAFBFC":"#fff",borderLeft:`3px solid ${s.completed?"#94A3B8":siteColor(s)}`}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
-                    <div style={{fontSize:13,fontWeight:700,color:s.completed?"#94A3B8":s.color}}>{s.name}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:s.completed?"#94A3B8":siteColor(s)}}>{s.name}</div>
                     {s.completed&&<span style={{background:"#94A3B8",color:"#fff",borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>完工</span>}
-                    {taskCnt>0&&<span style={{background:s.completed?"#E2E8F0":`${s.color}22`,color:s.completed?"#94A3B8":s.color,borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>{taskCnt}工程</span>}
+                    {taskCnt>0&&<span style={{background:s.completed?"#E2E8F0":`${siteColor(s)}22`,color:s.completed?"#94A3B8":siteColor(s),borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>{taskCnt}工程</span>}
                   </div>
                   <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>上限{s.capacity}人</div>
                 </div>
@@ -1737,7 +1749,7 @@ function App(){
         <div onClick={()=>setSheet(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.45)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:480,maxHeight:"85vh",overflowY:"auto",boxShadow:"0 -8px 30px rgba(0,0,0,.15)"}}>
             <div style={{width:40,height:4,background:"#E2E8F0",borderRadius:2,margin:"12px auto 0"}}/>
-            <div style={{background:site.color,padding:"11px 16px",margin:"10px 12px",borderRadius:10}}>
+            <div style={{background:siteColor(site),padding:"11px 16px",margin:"10px 12px",borderRadius:10}}>
               <div style={{fontSize:16,fontWeight:900,color:"#fff"}}>{task.name}</div>
               <div style={{fontSize:11,color:"rgba(255,255,255,.75)",marginTop:2}}>{site.name} / {cl?.name||""}</div>
             </div>
@@ -1760,7 +1772,7 @@ function App(){
               </div>
               <div style={{background:"#FFF7ED",borderRadius:9,padding:"9px 14px",border:"1px solid #FED7AA",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <span style={{fontSize:12,color:"#92400E"}}>1日あたり予定人数</span>
-                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:22,fontWeight:700,color:site.color}}>{task.workers}<span style={{fontSize:12}}> 人</span></span>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:22,fontWeight:700,color:siteColor(site)}}>{task.workers}<span style={{fontSize:12}}> 人</span></span>
               </div>
               {sl&&<div style={{background:"#EEF2FF",borderRadius:8,padding:"7px 12px",border:"1px solid #C7D2FE",fontSize:12,color:"#4F46E5",marginBottom:8}}>📅 {sl}</div>}
               {task.memo&&<div style={{background:"#F8FAFC",borderRadius:8,padding:"7px 12px",border:"1px solid #E2E8F0",fontSize:12,color:"#64748B",marginBottom:8}}><span style={{fontWeight:700,color:"#94A3B8"}}>備考：</span>{task.memo}</div>}
@@ -1824,7 +1836,7 @@ function App(){
 
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>setSheet(null)} style={{flex:1,background:"#F1F5F9",border:"none",borderRadius:10,padding:"12px",color:"#64748B",fontWeight:700,fontSize:14,cursor:"pointer"}}>閉じる</button>
-                <button onClick={()=>{setSheet(null);setTimeout(()=>openModal("task","edit",{...task}),50);}} style={{flex:2,background:site.color,border:"none",borderRadius:10,padding:"12px",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>✏ 詳細編集</button>
+                <button onClick={()=>{setSheet(null);setTimeout(()=>openModal("task","edit",{...task}),50);}} style={{flex:2,background:siteColor(site),border:"none",borderRadius:10,padding:"12px",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}>✏ 詳細編集</button>
               </div>
             </div>
           </div>
@@ -2139,7 +2151,15 @@ function App(){
             <MField label="元請け会社"><select value={form.clientId||clients[0]?.id||""} onChange={e=>setForm({...form,clientId:e.target.value})} style={IS}>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></MField>
             <MField label="現場名"><input type="text" value={form.name||""} onChange={e=>setForm({...form,name:e.target.value})} style={IS}/></MField>
             <MField label="上限人数"><input type="number" min={1} value={form.capacity||4} onChange={e=>setForm({...form,capacity:e.target.value})} style={IS}/></MField>
-            <MField label="カラー"><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{COLORS.map(c=><div key={c} onClick={()=>setForm({...form,color:c})} style={{width:30,height:30,borderRadius:7,background:c,cursor:"pointer",border:form.color===c?"3px solid #1E293B":"3px solid transparent"}}/>)}</div></MField>
+            <MField label="カラー（元請会社ごとに自動設定）">
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:9}}>
+                <div style={{width:28,height:28,borderRadius:7,background:clientColorMap[form.clientId]||"#94A3B8",flexShrink:0}}/>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#1E293B"}}>{clients.find(c=>c.id===form.clientId)?.name||"未選択"}</div>
+                  <div style={{fontSize:10,color:"#94A3B8"}}>元請会社を変更すると色が自動で変わります</div>
+                </div>
+              </div>
+            </MField>
             <MField label="工事ステータス">
               <Chk val={!!form.completed}
                 onChange={()=>setForm({...form,completed:!form.completed})}
