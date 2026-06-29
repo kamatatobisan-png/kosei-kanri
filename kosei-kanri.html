@@ -311,7 +311,7 @@ async function saveHistory({userInfo, action, col, items, summary}){
   }catch(e){console.warn("履歴保存失敗:",e);}
 }
 
-// Firestoreから全データ取得
+// Firestoreから全データ取得（小コレクションのみ）
 async function fbGetAll(){
   const db=getDb();
   const result={};
@@ -322,14 +322,113 @@ async function fbGetAll(){
   return result;
 }
 
-// Firestoreにコレクションを保存（全件上書き）
+// 直近3ヶ月のみ取得（日報・稼働用）
+function get3MonthsAgo(){
+  const d=new Date();
+  d.setMonth(d.getMonth()-3);
+  return d.toISOString().slice(0,10);
+}
+
+// 読み取りカウンター（localStorage で日次管理）
+const RC_KEY="kms_read_count";
+function addReadCount(n){
+  try{
+    const today=new Date().toISOString().slice(0,10);
+    const saved=JSON.parse(localStorage.getItem(RC_KEY)||"{}");
+    if(saved.date!==today){saved.date=today;saved.count=0;}
+    saved.count=(saved.count||0)+n;
+    localStorage.setItem(RC_KEY,JSON.stringify(saved));
+  }catch(_){}
+}
+function getReadCount(){
+  try{
+    const today=new Date().toISOString().slice(0,10);
+    const saved=JSON.parse(localStorage.getItem(RC_KEY)||"{}");
+    if(saved.date!==today)return 0;
+    return saved.count||0;
+  }catch(_){return 0;}
+}
+
+// 起動時：小コレクションのみ（日報・稼働は除く→月次タブで遅延読込）
+async function fbSmartSync(){
+  const db=getDb();
+  const smallCols=["clients","sites","tasks","workerMaster","qualMaster"];
+  const result={};
+  await Promise.all(smallCols.map(async col=>{
+    const snap=await db.collection(col).get();
+    result[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }));
+  // 読み取りカウント
+  const total=smallCols.reduce((s,k)=>(result[k]?.length||0)+s,0);
+  addReadCount(total);
+  return result;
+}
+
+// 月次タブ用：日報・稼働を対象月のみ取得
+async function fbLoadMonthlyData(yearMonth){
+  const db=getDb();
+  const [repSnap,attSnap]=await Promise.all([
+    db.collection("reports").where("date",">=",`${yearMonth}-01`).where("date","<=",`${yearMonth}-31`).get(),
+    db.collection("attendance").where("startDate",">=",`${yearMonth}-01`).where("startDate","<=",`${yearMonth}-31`).get(),
+  ]);
+  const reports=repSnap.docs.map(d=>({id:d.id,...d.data()}));
+  const attendance=attSnap.docs.map(d=>({id:d.id,...d.data()}));
+  addReadCount(reports.length+attendance.length);
+  return{reports,attendance};
+}
+
+// 過去データ取得（特定月より前）
+async function fbGetOldData(col, before){
+  const db=getDb();
+  const field=col==="reports"?"date":"startDate";
+  const snap=await db.collection(col).where(field,"<",before).get();
+  const items=snap.docs.map(d=>({id:d.id,...d.data()}));
+  addReadCount(items.length);
+  return items;
+}
+
+// 【差分保存】旧配列と新配列を比較して変更分のみ書き込む
+async function fbSaveCollectionDiff(col, newItems, oldItems=[]){
+  const db=getDb();
+  const batch=db.batch();
+  const oldMap={};
+  oldItems.forEach(item=>{if(item?.id)oldMap[String(item.id)]=item;});
+  const newMap={};
+  newItems.forEach(item=>{if(item?.id)newMap[String(item.id)]=item;});
+
+  let ops=0;
+  // 追加・更新
+  newItems.forEach(item=>{
+    if(!item?.id)return;
+    const key=String(item.id);
+    const old=oldMap[key];
+    // 変更ありの場合のみ書き込む
+    if(!old||JSON.stringify(old)!==JSON.stringify(item)){
+      const{id,...data}=item;
+      batch.set(db.collection(col).doc(key),data);
+      ops++;
+    }
+  });
+  // 削除（旧にあって新にない）
+  oldItems.forEach(item=>{
+    if(!item?.id)return;
+    const key=String(item.id);
+    if(!newMap[key]){
+      batch.delete(db.collection(col).doc(key));
+      ops++;
+    }
+  });
+
+  if(ops>0)await batch.commit();
+  return ops;
+}
+
+// 【全件上書き】初回同期・復元用（差分不要な場合）
 async function fbSaveCollection(col,items){
   const db=getDb();
   const batch=db.batch();
-  // 既存ドキュメントを削除
   const existing=await db.collection(col).get();
   existing.docs.forEach(d=>batch.delete(d.ref));
-  // 新規ドキュメントを追加
   items.forEach(item=>{
     const{id,...data}=item;
     batch.set(db.collection(col).doc(String(id)),data);
@@ -357,11 +456,12 @@ function useStore(){
   const pull=useCallback(async()=>{
     setSyncing(true);setSyncErr(null);
     try{
-      const d=await fbGetAll();
-      const hasData=COLLECTIONS.some(k=>d[k]&&d[k].length>0);
+      const d=await fbSmartSync();
+      const hasData=["clients","sites"].some(k=>d[k]&&d[k].length>0);
       if(hasData){
         _set(p=>{const next={...p,...d};saveLocal(next);return next;});
-        setLastSync(nowStr());setSynced(true);
+        localStorage.setItem("kms_cache_at",Date.now().toString());
+        setLastSync(nowStr());setSynced(true);setSyncErr(null);
       }
     }catch(e){setSyncErr(e.message);}
     finally{setSyncing(false);}
@@ -380,25 +480,38 @@ function useStore(){
     finally{setSyncing(false);}
   },[store]);
 
-  // 起動時：Firestoreから取得
+  // 起動時：キャッシュ確認→必要な分だけ読む
   useEffect(()=>{
     (async()=>{
       setSyncing(true);
       try{
-        const d=await fbGetAll();
-        const hasData=COLLECTIONS.some(k=>d[k]&&d[k].length>0);
-        if(hasData){
-          _set(p=>{const next={...p,...d};saveLocal(next);return next;});
-          setLastSync(nowStr());setSynced(true);
+        const CACHE_TTL=30*60*1000; // 30分
+        const cacheAt=parseInt(localStorage.getItem("kms_cache_at")||"0");
+        const cacheAge=Date.now()-cacheAt;
+        const cacheOK=cacheAge<CACHE_TTL&&(loadLocal().sites||[]).length>0;
+
+        if(cacheOK){
+          // キャッシュが新鮮 → Firestoreを読まない（0コスト）
+          setSynced(true);setLastSync(nowStr());
         } else {
-          // Firestoreが空→ローカルをFirestoreへ
-          const snap=loadLocal();
-          const locHasData=COLLECTIONS.some(k=>snap[k]&&snap[k].length>0);
-          if(locHasData){
-            await Promise.all(COLLECTIONS.map(col=>
-              snap[col]&&snap[col].length>0?fbSaveCollection(col,snap[col]):Promise.resolve()
-            ));
+          // キャッシュが古い or 初回 → スマート同期
+          const d=await fbSmartSync();
+          const hasData=["clients","sites"].some(k=>d[k]&&d[k].length>0);
+          if(hasData){
+            _set(p=>{const next={...p,...d};saveLocal(next);return next;});
+            localStorage.setItem("kms_cache_at",Date.now().toString());
             setLastSync(nowStr());setSynced(true);
+          } else {
+            // Firestoreが空→ローカルをFirestoreへ
+            const snap=loadLocal();
+            const locHasData=["clients","sites"].some(k=>snap[k]&&snap[k].length>0);
+            if(locHasData){
+              await Promise.all(COLLECTIONS.map(col=>
+                snap[col]&&snap[col].length>0?fbSaveCollection(col,snap[col]):Promise.resolve()
+              ));
+              localStorage.setItem("kms_cache_at",Date.now().toString());
+              setLastSync(nowStr());setSynced(true);
+            }
           }
         }
       }catch(e){setSyncErr(e.message);}
@@ -406,9 +519,11 @@ function useStore(){
     })();
   },[]);
 
-  // 30秒ごと自動pull
+  // 30秒ごと自動pull（キャッシュ更新も行う）
   useEffect(()=>{
-    const id=setInterval(()=>{if(!document.hidden)pull();},30000);
+    const id=setInterval(()=>{
+      if(!document.hidden)pull().then(()=>localStorage.setItem("kms_cache_at",Date.now().toString()));
+    },30000);
     return()=>clearInterval(id);
   },[pull]);
 
@@ -426,13 +541,13 @@ function useStore(){
   const get=k=>store[k]||[];
   const set=(k,v,historyOpts)=>{
     _set(prev=>{
+      const oldItems=prev[k]||[]; // 旧データを取得して差分比較に使う
       const next={...prev,[k]:v};
       saveLocal(next);
-      // Firestoreに即保存
-      fbSaveCollection(k,v).then(()=>{
+      // 差分のみFirestoreに保存（変更がないアイテムは書き込まない）
+      fbSaveCollectionDiff(k,v,oldItems).then(ops=>{
         setLastSync(nowStr());setSynced(true);
-        // 履歴保存（historyOptsが渡された場合）
-        if(historyOpts){
+        if(historyOpts&&ops>0){
           saveHistory({...historyOpts, col:k, items:v});
         }
       }).catch(e=>setSyncErr(e.message));
@@ -746,8 +861,94 @@ function UserManagePanel({userInfo}){
   );
 }
 
+// ─── 過去データ読み込み ────────────────────────────
+function OldDataLoader({mPfx, set, get}){
+  const[loading,setLoading]=useState(false);
+  const[done,setDone]=useState(false);
+
+  const load=async()=>{
+    setLoading(true);
+    try{
+      // 対象月の翌月1日をbeforeとして古いデータを取得
+      const [y,m]=mPfx.split("-").map(Number);
+      const nextM=m===12?`${y+1}-01`:(`${y}-${String(m+1).padStart(2,"0")}`);
+      const before=`${nextM}-01`;
+
+      const[repData,attData]=await Promise.all([
+        fbGetOldData("reports", before),
+        fbGetOldData("attendance", before),
+      ]);
+
+      // 対象月のデータだけフィルタして既存データにマージ
+      const mReports=repData.filter(r=>r.date&&r.date.startsWith(mPfx));
+      const mAtt=attData.filter(a=>a.startDate&&a.startDate.startsWith(mPfx));
+
+      const curReports=get("reports");
+      const curAtt=get("attendance");
+
+      // 重複除去してマージ
+      const newReports=[...curReports.filter(r=>!r.date||!r.date.startsWith(mPfx)), ...mReports];
+      const newAtt=[...curAtt.filter(a=>!a.startDate||!a.startDate.startsWith(mPfx)), ...mAtt];
+
+      set("reports",newReports);
+      set("attendance",newAtt);
+      setDone(true);
+    }catch(e){alert("読み込み失敗: "+e.message);}
+    setLoading(false);
+  };
+
+  if(done)return null;
+  return(
+    <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:9,padding:"10px 14px",marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+      <div style={{fontSize:11,color:"#B45309"}}>
+        📦 この月は直近3ヶ月の範囲外のため、データが読み込まれていません
+      </div>
+      <button onClick={load} disabled={loading}
+        style={{flexShrink:0,background:loading?"#94A3B8":"#B45309",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:loading?"not-allowed":"pointer"}}>
+        {loading?"読み込み中...":"📥 読み込む"}
+      </button>
+    </div>
+  );
+}
+
 // ─── 同期診断パネル ───────────────────────────────
-function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
+const FREE_QUOTA=50000;
+const WARN_THRESHOLD=40000; // 80%で警告
+
+function ReadCountBadge(){
+  const[count,setCount]=useState(getReadCount);
+  useEffect(()=>{
+    const id=setInterval(()=>setCount(getReadCount()),10000);
+    return()=>clearInterval(id);
+  },[]);
+  const pct=Math.min(100,Math.round(count/FREE_QUOTA*100));
+  const color=count>=WARN_THRESHOLD?"#DC2626":count>=FREE_QUOTA*0.5?"#D97706":"#16A34A";
+  const bg=count>=WARN_THRESHOLD?"#FEF2F2":count>=FREE_QUOTA*0.5?"#FFFBEB":"#F0FDF4";
+  const border=count>=WARN_THRESHOLD?"#FECACA":count>=FREE_QUOTA*0.5?"#FDE68A":"#BBF7D0";
+  return(
+    <div style={{background:bg,border:`1px solid ${border}`,borderRadius:8,padding:"8px 12px",marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+        <span style={{fontSize:11,fontWeight:700,color}}>
+          {count>=WARN_THRESHOLD?"⚠ 本日の読み取りが上限に近づいています":"📊 本日の読み取り数"}
+        </span>
+        <span style={{fontSize:11,fontWeight:700,color}}>{count.toLocaleString()} / {FREE_QUOTA.toLocaleString()}回</span>
+      </div>
+      <div style={{background:"#E2E8F0",borderRadius:4,height:6,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:4,transition:"width .3s"}}/>
+      </div>
+      <div style={{fontSize:9,color:"#94A3B8",marginTop:3,textAlign:"right"}}>
+        残り {(FREE_QUOTA-count).toLocaleString()}回 · 無料枠 {FREE_QUOTA.toLocaleString()}回/日
+      </div>
+      {count>=WARN_THRESHOLD&&(
+        <div style={{fontSize:10,color:"#DC2626",marginTop:5}}>
+          上限超過後は翌日0時まで同期が一時停止されます。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SyncPanel({syncErr,lastSync}){
   const[log,setLog]=useState([]);
   const[testing,setTesting]=useState(false);
   const addLog=(msg,type="info")=>setLog(l=>[{msg,type,ts:nowStr()},...l].slice(0,12));
@@ -772,50 +973,20 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
     setTesting(false);
   };
 
-  const doForcePush=async()=>{
-    addLog("📤 Firestoreへ全データ送信中...","info");
-    try{
-      await pushAll();
-      addLog("✅ 送信完了！他端末で反映されます","ok");
-    }catch(e){addLog("✗ 送信失敗: "+e.message,"error");}
-  };
-
-  const doForcePull=async()=>{
-    addLog("📥 Firestoreからデータ取得中...","info");
-    try{
-      const d=await fbGetAll();
-      const hasData=COLLECTIONS.some(k=>d[k]&&d[k].length>0);
-      if(hasData){
-        localStorage.setItem(LS,JSON.stringify({...JSON.parse(localStorage.getItem(LS)||"{}"), ...d}));
-        addLog("✅ 取得完了！リロードします...","ok");
-        setTimeout(()=>window.location.reload(),1000);
-      } else {
-        addLog("⚠ Firestoreにデータがありません","warn");
-      }
-    }catch(e){addLog("✗ 取得失敗: "+e.message,"error");}
-  };
-
   const logColors={ok:"#16A34A",warn:"#D97706",error:"#DC2626",info:"#64748B"};
 
   return(
     <div style={{marginBottom:4}}>
       <div style={{fontSize:11,fontWeight:700,color:"#16A34A",marginBottom:8}}>🔄 同期管理</div>
+      <ReadCountBadge/>
       {syncErr&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:7,padding:"7px 10px",fontSize:11,color:"#DC2626",marginBottom:8}}>✗ 同期エラー: {syncErr}</div>}
       {lastSync&&<div style={{fontSize:10,color:"#94A3B8",marginBottom:8}}>最終同期: {lastSync}</div>}
 
-      {/* メインボタン */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}}>
+      {/* 診断ボタン */}
+      <div style={{marginBottom:8}}>
         <button onClick={doTest} disabled={testing}
-          style={{background:"#EEF2FF",border:"1px solid #C7D2FE",borderRadius:7,padding:"8px 4px",fontSize:11,color:"#4F46E5",fontWeight:700,cursor:"pointer"}}>
-          🔍 診断
-        </button>
-        <button onClick={doForcePush}
-          style={{background:"#16A34A",border:"none",borderRadius:7,padding:"8px 4px",fontSize:11,color:"#fff",fontWeight:700,cursor:"pointer"}}>
-          📤 送信
-        </button>
-        <button onClick={doForcePull}
-          style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:7,padding:"8px 4px",fontSize:11,color:"#2563EB",fontWeight:700,cursor:"pointer"}}>
-          📥 取得
+          style={{background:"#EEF2FF",border:"1px solid #C7D2FE",borderRadius:7,padding:"9px 16px",fontSize:11,color:"#4F46E5",fontWeight:700,cursor:"pointer",width:"100%"}}>
+          🔍 接続診断
         </button>
       </div>
 
@@ -829,10 +1000,6 @@ function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
           ))}
         </div>
       )}
-
-      <div style={{fontSize:9,color:"#94A3B8",marginTop:8,lineHeight:1.7}}>
-        💡 <b>🔍 診断</b>でGASの状態を確認 → <b>📤 送信</b>でこの端末のデータをGASへ → 他端末で<b>📥 取得</b>またはページ更新
-      </div>
     </div>
   );
 }
@@ -897,6 +1064,30 @@ function App(){
   const[ganttFull,setGanttFull]=useState(false);
   const[mY,setMY]=useState(()=>new Date().getFullYear());
   const[mM,setMM]=useState(()=>new Date().getMonth()+1);
+  const[monthlyLoading,setMonthlyLoading]=useState(false);
+
+  // 月次タブを開いたとき or 月変更時 → 日報・稼働を取得
+  useEffect(()=>{
+    if(tab!=="monthly")return;
+    const ym=`${mY}-${String(mM).padStart(2,"0")}`;
+    // すでにその月のデータがあればスキップ
+    const hasRep=store.reports?.some(r=>r.date?.startsWith(ym));
+    const hasAtt=store.attendance?.some(a=>a.startDate?.startsWith(ym));
+    if(hasRep&&hasAtt)return;
+    setMonthlyLoading(true);
+    fbLoadMonthlyData(ym).then(({reports,attendance})=>{
+      setStore(prev=>{
+        const curRep=prev.reports||[];
+        const curAtt=prev.attendance||[];
+        const newRep=[...curRep.filter(r=>!r.date?.startsWith(ym)),...reports];
+        const newAtt=[...curAtt.filter(a=>!a.startDate?.startsWith(ym)),...attendance];
+        const next={...prev,reports:newRep,attendance:newAtt};
+        try{localStorage.setItem(LS,JSON.stringify(next));}catch(_){}
+        return next;
+      });
+    }).catch(e=>console.warn("月次データ取得失敗:",e))
+    .finally(()=>setMonthlyLoading(false));
+  },[tab,mY,mM]);
   const[pwModal,setPWModal]=useState(null);
   const[slideTask,setSlideTask]=useState(null);
   const[completedOpen,setCompletedOpen]=useState(false);
@@ -1905,6 +2096,24 @@ function App(){
             </div>
           </div>
 
+          {/* 3ヶ月より古いデータの読み込みボタン */}
+          {(()=>{
+            const cutoff=get3MonthsAgo();
+            const isOld=mPfx<cutoff.slice(0,7);
+            const hasData=reports.some(r=>r.date&&r.date.startsWith(mPfx));
+            if(!isOld||hasData)return null;
+            return(
+              <OldDataLoader mPfx={mPfx} set={set} get={get}/>
+            );
+          })()}
+
+          {/* 月次データ読み込み中 */}
+          {monthlyLoading&&(
+            <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:9,padding:"10px 14px",marginBottom:12,fontSize:11,color:"#2563EB"}}>
+              ⟳ {mY}/{String(mM).padStart(2,"0")} のデータを取得中...
+            </div>
+          )}
+
           <SH title="元請別" csvFn={()=>{const r=[["元請会社","日報件数","稼働日数","延べ人工"]];byClient.forEach(c=>r.push([c.name,c.cnt,c.dayCnt,c.workers]));dlCSV(`元請別_${mY}${Z(mM)}.csv`,r);}}>
             {byClient.length===0?<div style={{textAlign:"center",color:"#CBD5E1",padding:"14px",fontSize:12}}>データなし</div>
             :byClient.map((c,i)=><TR key={c.name} alt={i%2===1} cols={[{v:c.name,b:true},{w:"52px",v:c.cnt+"件",c:"#64748B",s:11,center:true},{w:"52px",v:c.dayCnt+"日",c:"#3B82F6",num:true,center:true},{w:"60px",v:c.workers+"人工",c:"#F97316",num:true,center:true}]}/>)}
@@ -2294,13 +2503,8 @@ function App(){
               {/* 同期診断パネル */}
               {(
                 <SyncPanel
-                  store={store}
-                  pull={pull}
-                  pushAll={pushAll}
-                  syncing={syncing}
                   syncErr={syncErr}
                   lastSync={lastSync}
-                  synced={synced}
                 />
               )}
 
