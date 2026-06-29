@@ -926,9 +926,10 @@ function App(){
   // ─── ガントスクロール同期 ─────────────────────
   const hRef=useRef(null),bRef=useRef(null),lRef=useRef(null);
   const lockH=useRef(false),lockV=useRef(false);
-  useEffect(()=>{
+
+  // 今日へスクロールする関数
+  const scrollToToday=useCallback(()=>{
     if(todayIdx<0)return;
-    // 今日を画面中央付近に表示（LW分を引いた表示幅の半分左にスクロール）
     const visibleW=Math.max(200,window.innerWidth-LW);
     const off=Math.max(0,todayIdx*DW-Math.floor(visibleW/2));
     setTimeout(()=>{
@@ -936,6 +937,14 @@ function App(){
       if(bRef.current)bRef.current.scrollLeft=off;
     },50);
   },[todayIdx]);
+
+  // 初回マウント時
+  useEffect(()=>{scrollToToday();},[todayIdx]);
+
+  // 工程タブを開くたびに今日へスクロール
+  useEffect(()=>{
+    if(tab==="gantt")scrollToToday();
+  },[tab]);
   const onScrollH=()=>{if(lockH.current)return;lockH.current=true;if(bRef.current)bRef.current.scrollLeft=hRef.current.scrollLeft;requestAnimationFrame(()=>lockH.current=false);};
   const onScrollB=()=>{
     if(!lockH.current){lockH.current=true;if(hRef.current)hRef.current.scrollLeft=bRef.current.scrollLeft;requestAnimationFrame(()=>lockH.current=false);}
