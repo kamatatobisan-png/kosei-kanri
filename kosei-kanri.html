@@ -238,7 +238,7 @@ function initFirebase(){
 function getDb(){return initFirebase().db;}
 function getAuth(){return initFirebase().auth;}
 
-const COLLECTIONS=["clients","sites","tasks","workerMaster","attendance","reports"];
+const COLLECTIONS=["clients","sites","tasks","workerMaster","attendance","reports","qualMaster"];
 const HISTORY_MAX=50;
 
 // 変更履歴を保存（軽量：概要＋変更コレクションのスナップショット）
@@ -533,7 +533,7 @@ function LoginScreen({onLogin}){
 }
 
 // ─── 変更履歴パネル ────────────────────────────────
-const COL_LABELS={"clients":"元請会社","sites":"現場","tasks":"工程","workerMaster":"作業員","attendance":"稼働","reports":"日報"};
+const COL_LABELS={"clients":"元請会社","sites":"現場","tasks":"工程","workerMaster":"作業員","attendance":"稼働","reports":"日報","qualMaster":"資格マスタ"};
 const ACTION_LABELS={"add":"追加","edit":"編集","delete":"削除"};
 const ACTION_COLORS={"add":"#16A34A","edit":"#2563EB","delete":"#DC2626"};
 
@@ -865,6 +865,7 @@ function App(){
   const sites       =get("sites");
   const tasks       =get("tasks");
   const workerMaster=get("workerMaster");
+  const qualMaster    =get("qualMaster");
   const attendance  =get("attendance");
   const reports     =get("reports");
 
@@ -920,6 +921,7 @@ function App(){
     return[...active,...done];
   },[sites,clients]);
   const sortedWorkers=useMemo(()=>[...workerMaster].sort((a,b)=>a.company.localeCompare(b.company,"ja")||a.name.localeCompare(b.name,"ja")),[workerMaster]);
+  const sortedQual   =useMemo(()=>[...qualMaster].sort((a,b)=>(a.category||"").localeCompare(b.category||"","ja")||a.name.localeCompare(b.name,"ja")),[qualMaster]);
 
   const reqOnDay=date=>tasks.filter(t=>date>=t.start&&date<=t.end&&isWorkDay(date,t)).reduce((s,t)=>s+t.workers,0);
   const reqBySite=(sid,date)=>{const t=tasks.find(t=>t.siteId===sid&&date>=t.start&&date<=t.end);return(t&&isWorkDay(date,t))?t.workers:0;};
@@ -1039,7 +1041,21 @@ function App(){
     else{const newList=sites.map(s=>s.id===e.id?e:s);set("sites",newList,{userInfo,action,summary});}
     closeModal();
   };
-  const saveWM=()=>{if(!form.name||!form.company)return;if(modal.mode==="add")set("workerMaster",[...workerMaster,{...form,id:uid()}]);else set("workerMaster",workerMaster.map(w=>w.id===form.id?form:w));closeModal();};
+  const saveWM=()=>{
+    if(!form.name||!form.company)return;
+    const action=modal.mode==="add"?"add":"edit";
+    const summary=`作業員「${form.name}」を${action==="add"?"追加":"編集"}（${form.company}）`;
+    if(modal.mode==="add")set("workerMaster",[...workerMaster,{...form,id:uid()}],{userInfo,action,summary});
+    else set("workerMaster",workerMaster.map(w=>w.id===form.id?form:w),{userInfo,action,summary});
+    closeModal();
+  };
+  const saveQM=()=>{
+    if(!form.qName)return;
+    const e={...form,id:form.id||uid(),name:form.qName,category:form.category||"その他"};
+    if(modal.mode==="add")set("qualMaster",[...qualMaster,e]);
+    else set("qualMaster",qualMaster.map(q=>q.id===e.id?e:q));
+    closeModal();
+  };
 
   // ─── 月次集計 ─────────────────────────────────
   const mPfx=`${mY}-${Z(mM)}`;
@@ -2116,10 +2132,36 @@ function App(){
                 });
                 return rows;
               },
-              add:()=>openModal("workerM","add",{name:"",company:"",note:""}),
+              add:()=>openModal("workerM","add",{name:"",company:"",note:"",expYears:"",qualIds:[]}),
               row:w=>(
-              <div key={w.id} className="row" onClick={()=>openModal("workerM","edit",{...w})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
-                <div><div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{w.name}</div>{w.note&&<div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{w.note}</div>}</div>
+              <div key={w.id} className="row" onClick={()=>openModal("workerM","edit",{...w,qualIds:w.qualIds||[]})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{w.name}</div>
+                    {w.expYears!=null&&w.expYears!==""&&<span style={{fontSize:9,background:"#EEF2FF",color:"#4F46E5",borderRadius:4,padding:"1px 5px",fontWeight:700}}>経験{w.expYears}年</span>}
+                  </div>
+                  {(w.qualIds||[]).length>0&&(
+                    <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:3}}>
+                      {(w.qualIds||[]).map(qid=>{
+                        const q=qualMaster.find(x=>x.id===qid);
+                        return q?<span key={qid} style={{fontSize:9,background:"#F0FDF4",color:"#16A34A",borderRadius:3,padding:"1px 5px"}}>{q.name}</span>:null;
+                      })}
+                    </div>
+                  )}
+                  {w.note&&<div style={{fontSize:10,color:"#94A3B8",marginTop:2}}>{w.note}</div>}
+                </div>
+                <span style={{fontSize:10,color:"#CBD5E1",flexShrink:0}}>▶</span>
+              </div>
+            )},
+            {title:"資格マスタ",color:"#0891B2",items:qualMaster,
+              sortedItems:sortedQual,
+              add:()=>openModal("qualM","add",{qName:"",category:"技能講習"}),
+              row:q=>(
+              <div key={q.id} className="row" onClick={()=>openModal("qualM","edit",{...q,qName:q.name})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#0891B2"}}>{q.name}</div>
+                  <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{q.category||"その他"}</div>
+                </div>
                 <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>
             )},
@@ -2670,8 +2712,51 @@ function App(){
             <MTitle c="#16A34A">{modal.mode==="add"?"＋ 作業員登録":"✏ 作業員編集"}</MTitle>
             <MField label="氏名"><input type="text" value={form.name||""} onChange={e=>setForm({...form,name:e.target.value})} style={IS}/></MField>
             <MField label="所属会社"><input type="text" value={form.company||""} onChange={e=>setForm({...form,company:e.target.value})} style={IS}/></MField>
+            <MField label="経験年数">
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <input type="number" min={0} max={60} value={form.expYears??""} onChange={e=>setForm({...form,expYears:e.target.value===""?"":+e.target.value})} style={{...IS,width:80}} placeholder="0"/>
+                <span style={{fontSize:13,color:"#64748B"}}>年</span>
+              </div>
+            </MField>
+            <MField label="保有資格">
+              {qualMaster.length===0
+                ?<div style={{fontSize:11,color:"#94A3B8",padding:"8px 0"}}>資格マスタが未登録です（設定タブで追加してください）</div>
+                :<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {qualMaster.map(q=>{
+                    const selected=(form.qualIds||[]).includes(q.id);
+                    return(
+                      <div key={q.id} onClick={()=>{
+                        const cur=form.qualIds||[];
+                        setForm({...form,qualIds:selected?cur.filter(x=>x!==q.id):[...cur,q.id]});
+                      }} style={{padding:"5px 10px",borderRadius:15,fontSize:11,fontWeight:600,cursor:"pointer",
+                        background:selected?"#1E293B":"#F1F5F9",
+                        color:selected?"#fff":"#64748B",
+                        border:`1px solid ${selected?"#1E293B":"#E2E8F0"}`}}>
+                        {selected?"✓ ":""}{q.name}
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+            </MField>
             <MField label="備考"><input type="text" value={form.note||""} onChange={e=>setForm({...form,note:e.target.value})} style={IS}/></MField>
             <MBtns onClose={closeModal} onSave={saveWM} onDelete={modal.mode==="edit"?()=>{set("workerMaster",workerMaster.filter(w=>w.id!==form.id));closeModal();}:null} saveColor="#16A34A"/>
+          </>}
+
+          {/* 資格マスタ */}
+          {modal.type==="qualM"&&<>
+            <MTitle c="#0891B2">{modal.mode==="add"?"＋ 資格追加":"✏ 資格編集"}</MTitle>
+            <MField label="資格名"><input type="text" value={form.qName||""} onChange={e=>setForm({...form,qName:e.target.value})} style={IS} placeholder="例：足場組立等作業主任者"/></MField>
+            <MField label="カテゴリ">
+              <select value={form.category||"技能講習"} onChange={e=>setForm({...form,category:e.target.value})} style={IS}>
+                <option>技能講習</option>
+                <option>安全衛生教育</option>
+                <option>作業主任者</option>
+                <option>免許</option>
+                <option>その他</option>
+              </select>
+            </MField>
+            <MBtns onClose={closeModal} onSave={saveQM} onDelete={modal.mode==="edit"?()=>{set("qualMaster",qualMaster.filter(q=>q.id!==form.id));closeModal();}:null} saveColor="#0891B2"/>
           </>}
 
         </div>
