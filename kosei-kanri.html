@@ -480,42 +480,15 @@ function useStore(){
     finally{setSyncing(false);}
   },[store]);
 
-  // 起動時：キャッシュ確認→必要な分だけ読む
+  // 起動時：キャッシュのみチェック（Firestoreアクセスはログイン後に行う）
   useEffect(()=>{
     (async()=>{
-      setSyncing(true);
-      try{
-        const CACHE_TTL=30*60*1000; // 30分
-        const cacheAt=parseInt(localStorage.getItem("kms_cache_at")||"0");
-        const cacheAge=Date.now()-cacheAt;
-        const cacheOK=cacheAge<CACHE_TTL&&(loadLocal().sites||[]).length>0;
-
-        if(cacheOK){
-          // キャッシュが新鮮 → Firestoreを読まない（0コスト）
-          setSynced(true);setLastSync(nowStr());
-        } else {
-          // キャッシュが古い or 初回 → スマート同期
-          const d=await fbSmartSync();
-          const hasData=["clients","sites"].some(k=>d[k]&&d[k].length>0);
-          if(hasData){
-            _set(p=>{const next={...p,...d};saveLocal(next);return next;});
-            localStorage.setItem("kms_cache_at",Date.now().toString());
-            setLastSync(nowStr());setSynced(true);
-          } else {
-            // Firestoreが空→ローカルをFirestoreへ
-            const snap=loadLocal();
-            const locHasData=["clients","sites"].some(k=>snap[k]&&snap[k].length>0);
-            if(locHasData){
-              await Promise.all(COLLECTIONS.map(col=>
-                snap[col]&&snap[col].length>0?fbSaveCollection(col,snap[col]):Promise.resolve()
-              ));
-              localStorage.setItem("kms_cache_at",Date.now().toString());
-              setLastSync(nowStr());setSynced(true);
-            }
-          }
-        }
-      }catch(e){setSyncErr(e.message);}
-      finally{setSyncing(false);}
+      const CACHE_TTL=30*60*1000; // 30分
+      const cacheAt=parseInt(localStorage.getItem("kms_cache_at")||"0");
+      const cacheAge=Date.now()-cacheAt;
+      const cacheOK=cacheAge<CACHE_TTL&&(loadLocal().sites||[]).length>0;
+      if(cacheOK){setSynced(true);setLastSync(nowStr());}
+      // Firestoreアクセスはログイン完了後（App側のisReadyエフェクト）に行う
     })();
   },[]);
 
@@ -761,6 +734,63 @@ function HistoryPanel({userInfo,set,get}){
   );
 }
 
+// ─── 自分のパスワード変更 ──────────────────────────
+function SelfPasswordChange({user}){
+  const[open,setOpen]=useState(false);
+  const[curPw,setCurPw]=useState("");
+  const[newPw,setNewPw]=useState("");
+  const[newPw2,setNewPw2]=useState("");
+  const[msg,setMsg]=useState(null);
+  const[loading,setLoading]=useState(false);
+
+  const IS={width:"100%",padding:"9px 11px",border:"1px solid #E2E8F0",borderRadius:7,fontSize:13,background:"#F8FAFC",outline:"none",marginBottom:8};
+
+  const handleChange=async()=>{
+    if(!curPw||!newPw||!newPw2){setMsg({t:"error",v:"すべて入力してください"});return;}
+    if(newPw.length<6){setMsg({t:"error",v:"新しいパスワードは6文字以上"});return;}
+    if(newPw!==newPw2){setMsg({t:"error",v:"新しいパスワードが一致しません"});return;}
+    setLoading(true);setMsg(null);
+    try{
+      // 再認証
+      const credential=firebase.auth.EmailAuthProvider.credential(user.email,curPw);
+      await getAuth().currentUser.reauthenticateWithCredential(credential);
+      // パスワード更新
+      await getAuth().currentUser.updatePassword(newPw);
+      setMsg({t:"ok",v:"✅ パスワードを変更しました"});
+      setCurPw("");setNewPw("");setNewPw2("");
+      setTimeout(()=>setOpen(false),1500);
+    }catch(e){
+      const m=e.code==="auth/wrong-password"||e.code==="auth/invalid-credential"
+        ?"現在のパスワードが正しくありません"
+        :e.code==="auth/weak-password"?"パスワードは6文字以上にしてください"
+        :"変更失敗: "+e.message;
+      setMsg({t:"error",v:m});
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div>
+      <button onClick={()=>{setOpen(o=>!o);setMsg(null);}}
+        style={{fontSize:11,color:"#4F46E5",background:"none",border:"none",cursor:"pointer",padding:0,fontWeight:600}}>
+        🔑 パスワードを変更する {open?"▲":"▼"}
+      </button>
+      {open&&(
+        <div style={{marginTop:10}}>
+          <input type="password" placeholder="現在のパスワード" value={curPw} onChange={e=>setCurPw(e.target.value)} style={IS}/>
+          <input type="password" placeholder="新しいパスワード（6文字以上）" value={newPw} onChange={e=>setNewPw(e.target.value)} style={IS}/>
+          <input type="password" placeholder="新しいパスワード（確認）" value={newPw2} onChange={e=>setNewPw2(e.target.value)} style={{...IS,marginBottom:0}}/>
+          {msg&&<div style={{fontSize:11,color:msg.t==="ok"?"#16A34A":"#DC2626",margin:"6px 0"}}>{msg.v}</div>}
+          <button onClick={handleChange} disabled={loading}
+            style={{width:"100%",marginTop:8,padding:"9px",background:loading?"#94A3B8":"#4F46E5",color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            {loading?"変更中...":"パスワードを変更"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ユーザー管理パネル ────────────────────────────
 function UserManagePanel({userInfo}){
   const[users,setUsers]=useState([]);
@@ -811,6 +841,14 @@ function UserManagePanel({userInfo}){
     loadUsers();
   };
 
+  const resetPassword=async(email)=>{
+    if(!confirm(`「${email}」にパスワードリセットメールを送信しますか？`))return;
+    try{
+      await getAuth().sendPasswordResetEmail(email);
+      setMsg(`✅ ${email} にリセットメールを送信しました`);
+    }catch(e){setMsg("✗ 送信失敗: "+e.message);}
+  };
+
   const IS={width:"100%",padding:"9px 11px",border:"1px solid #E2E8F0",borderRadius:7,fontSize:13,background:"#F8FAFC",outline:"none"};
 
   return(
@@ -821,22 +859,31 @@ function UserManagePanel({userInfo}){
       <div style={{background:"#F8FAFC",borderRadius:9,border:"1px solid #E2E8F0",marginBottom:12,overflow:"hidden"}}>
         {users.length===0?<div style={{padding:12,fontSize:11,color:"#94A3B8",textAlign:"center"}}>ユーザーなし</div>
         :users.map(u=>(
-          <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"1px solid #F1F5F9",opacity:u.active===false?0.5:1}}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}</div>
-              <div style={{fontSize:10,color:"#94A3B8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.email}</div>
+          <div key={u.id} style={{borderBottom:"1px solid #F1F5F9",opacity:u.active===false?0.5:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}</div>
+                <div style={{fontSize:10,color:"#94A3B8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.email}</div>
+              </div>
+              <span style={{fontSize:9,background:u.role==="admin"?"#1E293B":"#E2E8F0",color:u.role==="admin"?"#fff":"#64748B",borderRadius:4,padding:"2px 5px",flexShrink:0}}>{u.role==="admin"?"管理者":"一般"}</span>
+              {u.id!==userInfo?.uid&&<>
+                <button onClick={()=>toggleUser(u.id,u.active)}
+                  style={{fontSize:9,padding:"3px 7px",border:"1px solid #E2E8F0",borderRadius:5,background:"#fff",cursor:"pointer",color:u.active===false?"#16A34A":"#DC2626",flexShrink:0}}>
+                  {u.active===false?"有効化":"無効化"}
+                </button>
+                <button onClick={()=>deleteUser(u.id)}
+                  style={{fontSize:9,padding:"3px 7px",border:"1px solid #FECACA",borderRadius:5,background:"#FEF2F2",cursor:"pointer",color:"#DC2626",flexShrink:0}}>
+                  削除
+                </button>
+              </>}
             </div>
-            <span style={{fontSize:9,background:u.role==="admin"?"#1E293B":"#E2E8F0",color:u.role==="admin"?"#fff":"#64748B",borderRadius:4,padding:"2px 5px",flexShrink:0}}>{u.role==="admin"?"管理者":"一般"}</span>
-            {u.id!==userInfo?.uid&&<>
-              <button onClick={()=>toggleUser(u.id,u.active)}
-                style={{fontSize:9,padding:"3px 7px",border:"1px solid #E2E8F0",borderRadius:5,background:"#fff",cursor:"pointer",color:u.active===false?"#16A34A":"#DC2626",flexShrink:0}}>
-                {u.active===false?"有効化":"無効化"}
+            {/* パスワードリセット行 */}
+            <div style={{padding:"0 12px 8px",display:"flex",justifyContent:"flex-end"}}>
+              <button onClick={()=>resetPassword(u.email)}
+                style={{fontSize:9,padding:"3px 9px",border:"1px solid #C7D2FE",borderRadius:5,background:"#EEF2FF",cursor:"pointer",color:"#4F46E5",fontWeight:600}}>
+                🔑 PW リセットメール送信
               </button>
-              <button onClick={()=>deleteUser(u.id)}
-                style={{fontSize:9,padding:"3px 7px",border:"1px solid #FECACA",borderRadius:5,background:"#FEF2F2",cursor:"pointer",color:"#DC2626",flexShrink:0}}>
-                削除
-              </button>
-            </>}
+            </div>
           </div>
         ))}
       </div>
@@ -1094,6 +1141,11 @@ function App(){
 
   // ログイン確認フラグ（早期returnはhookルール違反のため使わない）
   const isReady=!authLoading&&!!user&&!!userInfo;
+
+  // ログイン完了後にFirestoreからデータ取得
+  useEffect(()=>{
+    if(isReady)pull();
+  },[isReady]);
 
 
   const clients     =get("clients");
@@ -2518,10 +2570,12 @@ function App(){
             </div>
           </div>
 
-          {/* ログインユーザー情報・ログアウト */}
+          {/* ログインユーザー情報・パスワード変更・ログアウト */}
           <div style={{marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍アカウント</div>
             <div style={{background:"#fff",borderRadius:10,border:"1px solid #E2E8F0",padding:"12px 14px"}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              {/* ユーザー情報 */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,paddingBottom:12,borderBottom:"1px solid #F1F5F9"}}>
                 <div>
                   <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{userInfo?.name||userInfo?.email}</div>
                   <div style={{fontSize:10,color:"#94A3B8",marginTop:2}}>{userInfo?.email} · {userInfo?.role==="admin"?"管理者":"一般ユーザー"}</div>
@@ -2531,6 +2585,8 @@ function App(){
                   ログアウト
                 </button>
               </div>
+              {/* 自分のパスワード変更 */}
+              <SelfPasswordChange user={user}/>
             </div>
           </div>
         </div>
