@@ -928,22 +928,24 @@ function App(){
   const lockH=useRef(false),lockV=useRef(false);
 
   // 今日へスクロールする関数
-  const scrollToToday=useCallback(()=>{
+  const scrollToToday=useCallback((delay=50)=>{
     if(todayIdx<0)return;
     const visibleW=Math.max(200,window.innerWidth-LW);
     const off=Math.max(0,todayIdx*DW-Math.floor(visibleW/2));
     setTimeout(()=>{
       if(hRef.current)hRef.current.scrollLeft=off;
       if(bRef.current)bRef.current.scrollLeft=off;
-    },50);
+    },delay);
   },[todayIdx]);
 
-  // 初回マウント時
-  useEffect(()=>{scrollToToday();},[todayIdx]);
+  // 初回：認証完了→ガント描画後にスクロール（長めに待つ）
+  useEffect(()=>{
+    if(isReady&&tab==="gantt")scrollToToday(200);
+  },[isReady]);
 
   // 工程タブを開くたびに今日へスクロール
   useEffect(()=>{
-    if(tab==="gantt")scrollToToday();
+    if(tab==="gantt")scrollToToday(50);
   },[tab]);
   const onScrollH=()=>{if(lockH.current)return;lockH.current=true;if(bRef.current)bRef.current.scrollLeft=hRef.current.scrollLeft;requestAnimationFrame(()=>lockH.current=false);};
   const onScrollB=()=>{
