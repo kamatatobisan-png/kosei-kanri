@@ -239,6 +239,33 @@ function getDb(){return initFirebase().db;}
 function getAuth(){return initFirebase().auth;}
 
 const COLLECTIONS=["clients","sites","tasks","workerMaster","attendance","reports"];
+const HISTORY_MAX=50;
+
+// 変更履歴を保存（軽量：概要＋変更コレクションのスナップショット）
+async function saveHistory({userInfo, action, col, items, summary}){
+  try{
+    const db=getDb();
+    const entry={
+      ts: new Date().toISOString(),
+      userName: userInfo?.name||userInfo?.email||"不明",
+      uid: userInfo?.uid||"",
+      action,        // "add"|"edit"|"delete"
+      col,           // "sites"|"tasks" etc.
+      summary,       // 人が読める説明
+      snapshot: items, // 変更されたコレクションのデータ（復元用）
+    };
+    // 追加
+    await db.collection("history").add(entry);
+    // 50件超えたら古いものを削除
+    const snap=await db.collection("history").orderBy("ts","asc").get();
+    if(snap.size>HISTORY_MAX){
+      const toDelete=snap.docs.slice(0, snap.size-HISTORY_MAX);
+      const batch=db.batch();
+      toDelete.forEach(d=>batch.delete(d.ref));
+      await batch.commit();
+    }
+  }catch(e){console.warn("履歴保存失敗:",e);}
+}
 
 // Firestoreから全データ取得
 async function fbGetAll(){
@@ -353,13 +380,17 @@ function useStore(){
   },[saveLocal]);
 
   const get=k=>store[k]||[];
-  const set=(k,v)=>{
+  const set=(k,v,historyOpts)=>{
     _set(prev=>{
       const next={...prev,[k]:v};
       saveLocal(next);
       // Firestoreに即保存
       fbSaveCollection(k,v).then(()=>{
         setLastSync(nowStr());setSynced(true);
+        // 履歴保存（historyOptsが渡された場合）
+        if(historyOpts){
+          saveHistory({...historyOpts, col:k, items:v});
+        }
       }).catch(e=>setSyncErr(e.message));
       return next;
     });
@@ -497,6 +528,76 @@ function LoginScreen({onLogin}){
           {loading?"ログイン中...":"ログイン"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── 変更履歴パネル ────────────────────────────────
+const COL_LABELS={"clients":"元請会社","sites":"現場","tasks":"工程","workerMaster":"作業員","attendance":"稼働","reports":"日報"};
+const ACTION_LABELS={"add":"追加","edit":"編集","delete":"削除"};
+const ACTION_COLORS={"add":"#16A34A","edit":"#2563EB","delete":"#DC2626"};
+
+function HistoryPanel({userInfo,set,get}){
+  const[history,setHistory]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[restoring,setRestoring]=useState(null);
+
+  const loadHistory=async()=>{
+    setLoading(true);
+    try{
+      const snap=await getDb().collection("history").orderBy("ts","desc").limit(HISTORY_MAX).get();
+      setHistory(snap.docs.map(d=>({id:d.id,...d.data()})));
+    }catch(e){console.warn(e);}
+    setLoading(false);
+  };
+
+  useEffect(()=>{loadHistory();},[]);
+
+  const restore=async(entry)=>{
+    if(!confirm(`「${entry.summary}」の時点に「${COL_LABELS[entry.col]||entry.col}」を復元しますか？\n\n⚠ 現在のデータが上書きされます`))return;
+    setRestoring(entry.id);
+    try{
+      await fbSaveCollection(entry.col, entry.snapshot);
+      // stateも更新
+      set(entry.col, entry.snapshot);
+      alert("✅ 復元しました");
+      loadHistory();
+    }catch(e){alert("✗ 復元失敗: "+e.message);}
+    setRestoring(null);
+  };
+
+  const fmtTs=(ts)=>{
+    if(!ts)return"";
+    const d=new Date(ts);
+    return`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  };
+
+  return(
+    <div style={{background:"#fff",borderRadius:10,border:"1px solid #E2E8F0",overflow:"hidden"}}>
+      <div style={{padding:"8px 12px",background:"#F8FAFC",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:11,color:"#64748B"}}>最新{HISTORY_MAX}件まで表示</span>
+        <button onClick={loadHistory} style={{fontSize:10,padding:"3px 8px",border:"1px solid #E2E8F0",borderRadius:5,background:"#fff",cursor:"pointer",color:"#64748B"}}>🔄 更新</button>
+      </div>
+      {loading?<div style={{padding:16,textAlign:"center",fontSize:11,color:"#94A3B8"}}>読み込み中...</div>
+      :history.length===0?<div style={{padding:16,textAlign:"center",fontSize:11,color:"#94A3B8"}}>変更履歴がありません</div>
+      :history.map((h,i)=>(
+        <div key={h.id} style={{padding:"9px 12px",borderBottom:"1px solid #F1F5F9",display:"flex",alignItems:"center",gap:8}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+              <span style={{fontSize:9,background:ACTION_COLORS[h.action]||"#64748B",color:"#fff",borderRadius:3,padding:"1px 5px",fontWeight:700,flexShrink:0}}>{ACTION_LABELS[h.action]||h.action}</span>
+              <span style={{fontSize:9,background:"#F1F5F9",color:"#64748B",borderRadius:3,padding:"1px 5px",flexShrink:0}}>{COL_LABELS[h.col]||h.col}</span>
+              <span style={{fontSize:10,color:"#1E293B",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.summary}</span>
+            </div>
+            <div style={{fontSize:9,color:"#94A3B8"}}>{fmtTs(h.ts)} · {h.userName}</div>
+          </div>
+          {h.snapshot&&(
+            <button onClick={()=>restore(h)} disabled={restoring===h.id}
+              style={{fontSize:9,padding:"3px 7px",border:"1px solid #FDE68A",borderRadius:5,background:"#FFFBEB",cursor:"pointer",color:"#B45309",fontWeight:700,flexShrink:0}}>
+              {restoring===h.id?"復元中...":"復元"}
+            </button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -854,49 +955,90 @@ function App(){
   const saveTask=()=>{
     if(!form.name||!form.start||!form.end)return;
     const e={...form,workers:+form.workers||1};
-    if(modal.mode==="add")set("tasks",[...tasks,{...e,id:uid()}]);
-    else set("tasks",tasks.map(t=>t.id===e.id?e:t));
+    const site=sites.find(s=>s.id===e.siteId);
+    const action=modal.mode==="add"?"add":"edit";
+    const summary=`工程「${e.name}」を${action==="add"?"追加":"編集"}（${site?.name||""}）`;
+    if(modal.mode==="add")set("tasks",[...tasks,{...e,id:uid()}],{userInfo,action,summary});
+    else set("tasks",tasks.map(t=>t.id===e.id?e:t),{userInfo,action,summary});
     closeModal();
   };
-  const delTask=id=>{set("tasks",tasks.filter(t=>t.id!==id));closeModal();};
+  const delTask=id=>{
+    const t=tasks.find(x=>x.id===id);
+    const site=sites.find(s=>s.id===t?.siteId);
+    set("tasks",tasks.filter(t=>t.id!==id),{userInfo,action:"delete",summary:`工程「${t?.name||""}」を削除（${site?.name||""}）`});
+    closeModal();
+  };
 
   // 工程スライド（日程を±N日ずらす）
   const slideTaskDays=(taskId,delta)=>{
-    set("tasks",tasks.map(t=>{
+    const t=tasks.find(x=>x.id===taskId);
+    const newTasks=tasks.map(t=>{
       if(t.id!==taskId)return t;
       return{...t,start:addDays(t.start,delta),end:addDays(t.end,delta)};
-    }));
+    });
+    set("tasks",newTasks,{userInfo,action:"edit",summary:`工程「${t?.name||""}」の日程を${delta>0?"+":""}${delta}日移動`});
   };
 
   const saveAtt=()=>{
     if(!form.workerName||!form.company||!form.startDate)return;
     const e={...form,endDate:form.endDate||form.startDate};
-    if(modal.mode==="add")set("attendance",[...attendance,{...e,id:uid()}]);
-    else set("attendance",attendance.map(a=>a.id===e.id?e:a));
+    const action=modal.mode==="add"?"add":"edit";
+    const summary=`稼働「${e.workerName}」を${action==="add"?"追加":"編集"}（${e.startDate}〜${e.endDate}）`;
+    if(modal.mode==="add")set("attendance",[...attendance,{...e,id:uid()}],{userInfo,action,summary});
+    else set("attendance",attendance.map(a=>a.id===e.id?e:a),{userInfo,action,summary});
     closeModal();
   };
-  const delAtt=id=>{set("attendance",attendance.filter(a=>a.id!==id));closeModal();};
+  const delAtt=id=>{
+    const a=attendance.find(x=>x.id===id);
+    set("attendance",attendance.filter(a=>a.id!==id),{userInfo,action:"delete",summary:`稼働「${a?.workerName||""}」を削除`});
+    closeModal();
+  };
 
   const saveReport=(allowEdit=false)=>{
     if(!form.date||!form.siteId)return;
     const e={...form,safety:!!form.safety,locked:!allowEdit};
+    const site=sites.find(s=>s.id===e.siteId);
+    const action=modal.mode==="add"?"add":"edit";
+    const summary=`日報「${e.date} ${site?.name||""}」を${action==="add"?"追加":"編集"}`;
     // 新しい作業員をマスタに自動追加
     const newWorkers=(form.workers||[]).filter(w=>w.name&&w.company&&!workerMaster.find(m=>m.name===w.name));
     if(newWorkers.length>0){
       const newMaster=[...workerMaster,...newWorkers.map(w=>({id:uid(),name:w.name,company:w.company,note:""}))];
       set("workerMaster",newMaster);
     }
-    if(modal.mode==="add")set("reports",[...reports,{...e,id:uid()}]);
-    else set("reports",reports.map(r=>r.id===e.id?e:r));
+    if(modal.mode==="add")set("reports",[...reports,{...e,id:uid()}],{userInfo,action,summary});
+    else set("reports",reports.map(r=>r.id===e.id?e:r),{userInfo,action,summary});
     closeModal();
   };
   const delReport=(id,isAdmin)=>{
-    if(!isAdmin){setPWModal({title:"日報の削除には管理者権限が必要です",onSuccess:()=>{set("reports",reports.filter(r=>r.id!==id));closeModal();setPWModal(null);}});return;}
-    set("reports",reports.filter(r=>r.id!==id));closeModal();
+    const r=reports.find(x=>x.id===id);
+    const site=sites.find(s=>s.id===r?.siteId);
+    const doDelete=()=>{
+      set("reports",reports.filter(r=>r.id!==id),{userInfo,action:"delete",summary:`日報「${r?.date||""} ${site?.name||""}」を削除`});
+      closeModal();
+    };
+    if(!isAdmin){setPWModal({title:"日報の削除には管理者権限が必要です",onSuccess:()=>{doDelete();setPWModal(null);}});return;}
+    doDelete();
   };
 
-  const saveClient=()=>{if(!form.name)return;if(modal.mode==="add")set("clients",[...clients,{...form,id:uid()}]);else set("clients",clients.map(c=>c.id===form.id?form:c));closeModal();};
-  const saveSite=()=>{if(!form.name)return;const e={...form,clientId:form.clientId,capacity:+form.capacity||4};if(modal.mode==="add")set("sites",[...sites,{...e,id:uid(),color:e.color||COLORS[sites.length%COLORS.length]}]);else set("sites",sites.map(s=>s.id===e.id?e:s));closeModal();};
+  const saveClient=()=>{
+    if(!form.name)return;
+    const action=modal.mode==="add"?"add":"edit";
+    const summary=`元請会社「${form.name}」を${action==="add"?"追加":"編集"}`;
+    if(modal.mode==="add"){const newList=[...clients,{...form,id:uid()}];set("clients",newList,{userInfo,action,summary});}
+    else{const newList=clients.map(c=>c.id===form.id?form:c);set("clients",newList,{userInfo,action,summary});}
+    closeModal();
+  };
+  const saveSite=()=>{
+    if(!form.name)return;
+    const e={...form,clientId:form.clientId,capacity:+form.capacity||4};
+    const action=modal.mode==="add"?"add":"edit";
+    const cl=clients.find(c=>c.id===e.clientId);
+    const summary=`現場「${e.name}」を${action==="add"?"追加":"編集"}（${cl?.name||""}）${e.completed?" → 完工":""}`;
+    if(modal.mode==="add"){const newList=[...sites,{...e,id:uid(),color:e.color||COLORS[sites.length%COLORS.length]}];set("sites",newList,{userInfo,action,summary});}
+    else{const newList=sites.map(s=>s.id===e.id?e:s);set("sites",newList,{userInfo,action,summary});}
+    closeModal();
+  };
   const saveWM=()=>{if(!form.name||!form.company)return;if(modal.mode==="add")set("workerMaster",[...workerMaster,{...form,id:uid()}]);else set("workerMaster",workerMaster.map(w=>w.id===form.id?form:w));closeModal();};
 
   // ─── 月次集計 ─────────────────────────────────
@@ -2024,6 +2166,14 @@ function App(){
               }
             </div>
           </div>
+
+          {/* 変更履歴（管理者のみ） */}
+          {userInfo?.role==="admin"&&(
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍変更履歴</div>
+              <HistoryPanel userInfo={userInfo} set={set} get={get}/>
+            </div>
+          )}
 
           {/* ユーザー管理（管理者のみ） */}
           {userInfo?.role==="admin"&&(
