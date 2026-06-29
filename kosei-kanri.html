@@ -52,7 +52,23 @@ const STATUS={
 };
 const COLORS=["#F97316","#3B82F6","#10B981","#F59E0B","#EC4899","#8B5CF6","#06B6D4","#EF4444","#84CC16","#F43F5E"];
 
-// 資格カテゴリごとに自動配色（同じカテゴリは常に同じ色）
+// 資格カテゴリの表示順（先頭ほど優先）
+const QUAL_CAT_ORDER=["免許","特別教育","技能講習","技能検定","作業主任者","安全衛生教育","その他"];
+function qualCatRank(cat){
+  const i=QUAL_CAT_ORDER.indexOf(cat||"その他");
+  return i===-1?QUAL_CAT_ORDER.length:i;
+}
+// 資格IDリストをカテゴリ順→名前順でソート
+function sortQualIds(qualIds, qualMaster){
+  if(!qualIds||!qualMaster)return qualIds||[];
+  return [...qualIds].sort((a,b)=>{
+    const qa=qualMaster.find(q=>q.id===a);
+    const qb=qualMaster.find(q=>q.id===b);
+    const rankDiff=qualCatRank(qa?.category)-qualCatRank(qb?.category);
+    if(rankDiff!==0)return rankDiff;
+    return(qa?.name||"").localeCompare(qb?.name||"","ja");
+  });
+}
 const QUAL_CAT_COLORS={
   "技能講習":    {bg:"#EFF6FF",text:"#2563EB",border:"#BFDBFE"},
   "安全衛生教育":{bg:"#F0FDF4",text:"#16A34A",border:"#BBF7D0"},
@@ -2170,7 +2186,7 @@ function App(){
                   </div>
                   {(w.qualIds||[]).length>0&&(
                     <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:3}}>
-                      {(w.qualIds||[]).map(qid=>{
+                      {sortQualIds(w.qualIds||[], qualMaster).map(qid=>{
                         const q=qualMaster.find(x=>x.id===qid);
                         if(!q)return null;const qc=getQualCatColor(q.category);return <span key={qid} style={{fontSize:9,background:qc.bg,color:qc.text,border:`1px solid ${qc.border}`,borderRadius:3,padding:"1px 5px"}}>{q.name}</span>;
                       })}
@@ -2754,7 +2770,7 @@ function App(){
               {qualMaster.length===0
                 ?<div style={{fontSize:11,color:"#94A3B8",padding:"8px 0"}}>資格マスタが未登録です（設定タブで追加してください）</div>
                 :<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                  {qualMaster.map(q=>{
+                  {[...qualMaster].sort((a,b)=>qualCatRank(a.category)-qualCatRank(b.category)||(a.name.localeCompare(b.name,'ja'))).map(q=>{
                     const selected=(form.qualIds||[]).includes(q.id);
                     const qc=getQualCatColor(q.category);
                     return(
@@ -2784,9 +2800,8 @@ function App(){
               <input type="text" value={form.category||""} onChange={e=>setForm({...form,category:e.target.value})}
                 list="qual-category-list" style={IS} placeholder="例：技能講習"/>
               <datalist id="qual-category-list">
-                {/* 既存カテゴリ＋デフォルト候補 */}
                 {[...new Set([
-                  "技能講習","安全衛生教育","作業主任者","免許","特別教育","その他",
+                  ...QUAL_CAT_ORDER,
                   ...qualMaster.map(q=>q.category).filter(Boolean)
                 ])].map(cat=><option key={cat} value={cat}/>)}
               </datalist>
