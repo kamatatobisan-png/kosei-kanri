@@ -2747,14 +2747,17 @@ function App(){
           {modal.type==="qualM"&&<>
             <MTitle c="#0891B2">{modal.mode==="add"?"＋ 資格追加":"✏ 資格編集"}</MTitle>
             <MField label="資格名"><input type="text" value={form.qName||""} onChange={e=>setForm({...form,qName:e.target.value})} style={IS} placeholder="例：足場組立等作業主任者"/></MField>
-            <MField label="カテゴリ">
-              <select value={form.category||"技能講習"} onChange={e=>setForm({...form,category:e.target.value})} style={IS}>
-                <option>技能講習</option>
-                <option>安全衛生教育</option>
-                <option>作業主任者</option>
-                <option>免許</option>
-                <option>その他</option>
-              </select>
+            <MField label="カテゴリ（自由入力可）">
+              <input type="text" value={form.category||""} onChange={e=>setForm({...form,category:e.target.value})}
+                list="qual-category-list" style={IS} placeholder="例：技能講習"/>
+              <datalist id="qual-category-list">
+                {/* 既存カテゴリ＋デフォルト候補 */}
+                {[...new Set([
+                  "技能講習","安全衛生教育","作業主任者","免許","特別教育","その他",
+                  ...qualMaster.map(q=>q.category).filter(Boolean)
+                ])].map(cat=><option key={cat} value={cat}/>)}
+              </datalist>
+              <div style={{fontSize:10,color:"#94A3B8",marginTop:4}}>候補から選ぶか、自由に入力できます</div>
             </MField>
             <MBtns onClose={closeModal} onSave={saveQM} onDelete={modal.mode==="edit"?()=>{set("qualMaster",qualMaster.filter(q=>q.id!==form.id));closeModal();}:null} saveColor="#0891B2"/>
           </>}
