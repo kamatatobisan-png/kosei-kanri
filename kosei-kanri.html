@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#1E293B">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Oswald:wght@600&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -225,20 +226,23 @@ const SEED={
 // ════════════════════════════════════════════════════════════════
 const LS="kms_v2"; // ローカルキャッシュ用
 
-// Firebaseを初期化してFirestoreを返す
+// Firebaseを初期化してFirestoreとAuthを返す
 function initFirebase(){
-  if(window._fbApp)return window._fbDb;
+  if(window._fbApp)return{db:window._fbDb,auth:window._fbAuth};
   const app=firebase.initializeApp(FIREBASE_CONFIG);
   window._fbApp=app;
   window._fbDb=firebase.firestore(app);
-  return window._fbDb;
+  window._fbAuth=firebase.auth(app);
+  return{db:window._fbDb,auth:window._fbAuth};
 }
+function getDb(){return initFirebase().db;}
+function getAuth(){return initFirebase().auth;}
 
 const COLLECTIONS=["clients","sites","tasks","workerMaster","attendance","reports"];
 
 // Firestoreから全データ取得
 async function fbGetAll(){
-  const db=initFirebase();
+  const db=getDb();
   const result={};
   await Promise.all(COLLECTIONS.map(async col=>{
     const snap=await db.collection(col).get();
@@ -249,7 +253,7 @@ async function fbGetAll(){
 
 // Firestoreにコレクションを保存（全件上書き）
 async function fbSaveCollection(col,items){
-  const db=initFirebase();
+  const db=getDb();
   const batch=db.batch();
   // 既存ドキュメントを削除
   const existing=await db.collection(col).get();
@@ -393,6 +397,210 @@ const Chk=({val,onChange,label,sub,color="#6366F1"})=>(
   </div>
 );
 
+// ─── 認証フック ───────────────────────────────────
+function useAuth(){
+  const[user,setUser]=useState(null);
+  const[userInfo,setUserInfo]=useState(null); // Firestoreのユーザー情報
+  const[authLoading,setAuthLoading]=useState(true);
+
+  useEffect(()=>{
+    const auth=getAuth();
+    const unsub=auth.onAuthStateChanged(async u=>{
+      setUser(u);
+      if(u){
+        // Firestoreからユーザー情報取得
+        try{
+          const doc=await getDb().collection("appUsers").doc(u.uid).get();
+          if(doc.exists&&doc.data().active!==false){
+            setUserInfo({uid:u.uid,email:u.email,...doc.data()});
+          } else {
+            // ユーザー情報なし or 無効化済み → ログアウト
+            await auth.signOut();
+            setUser(null);setUserInfo(null);
+          }
+        }catch(e){
+          // 初回管理者（appUsersが空）の場合は通過
+          setUserInfo({uid:u.uid,email:u.email,role:"admin",name:u.email,active:true});
+        }
+      } else {
+        setUserInfo(null);
+      }
+      setAuthLoading(false);
+    });
+    return unsub;
+  },[]);
+
+  const login=async(email,pw)=>{
+    const auth=getAuth();
+    await auth.signInWithEmailAndPassword(email,pw);
+  };
+  const logout=async()=>{
+    await getAuth().signOut();
+  };
+  return{user,userInfo,authLoading,login,logout};
+}
+
+// ─── ログイン画面 ──────────────────────────────────
+function LoginScreen({onLogin}){
+  const[email,setEmail]=useState("");
+  const[pw,setPw]=useState("");
+  const[err,setErr]=useState("");
+  const[loading,setLoading]=useState(false);
+
+  const handleLogin=async()=>{
+    if(!email||!pw){setErr("メールアドレスとパスワードを入力してください");return;}
+    setLoading(true);setErr("");
+    try{
+      await onLogin(email,pw);
+    }catch(e){
+      const msg=e.code==="auth/invalid-credential"||e.code==="auth/wrong-password"||e.code==="auth/user-not-found"
+        ?"メールアドレスまたはパスワードが違います"
+        :e.code==="auth/invalid-email"?"メールアドレスの形式が正しくありません"
+        :"ログインに失敗しました: "+e.message;
+      setErr(msg);
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#F1F5F9",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:16,padding:32,width:"100%",maxWidth:360,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
+        {/* ロゴ */}
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:32,marginBottom:8}}>🏗</div>
+          <div style={{fontSize:20,fontWeight:900,color:"#1E293B"}}>工程管理システム</div>
+          <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>株式会社 鳶洋</div>
+        </div>
+
+        {/* 入力フォーム */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:5}}>メールアドレス</div>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+            placeholder="example@example.com"
+            style={{width:"100%",padding:"12px 14px",border:"1px solid #E2E8F0",borderRadius:9,fontSize:14,outline:"none",background:"#F8FAFC"}}
+            onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+          />
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:5}}>パスワード</div>
+          <input type="password" value={pw} onChange={e=>setPw(e.target.value)}
+            placeholder="パスワード"
+            style={{width:"100%",padding:"12px 14px",border:"1px solid #E2E8F0",borderRadius:9,fontSize:14,outline:"none",background:"#F8FAFC"}}
+            onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+          />
+        </div>
+
+        {err&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#DC2626",marginBottom:14}}>{err}</div>}
+
+        <button onClick={handleLogin} disabled={loading}
+          style={{width:"100%",padding:"13px",background:loading?"#94A3B8":"#1E293B",color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:loading?"not-allowed":"pointer"}}>
+          {loading?"ログイン中...":"ログイン"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ユーザー管理パネル ────────────────────────────
+function UserManagePanel({userInfo}){
+  const[users,setUsers]=useState([]);
+  const[newEmail,setNewEmail]=useState("");
+  const[newPw,setNewPw]=useState("");
+  const[newName,setNewName]=useState("");
+  const[newRole,setNewRole]=useState("user");
+  const[msg,setMsg]=useState("");
+  const[loading,setLoading]=useState(false);
+
+  const loadUsers=async()=>{
+    const snap=await getDb().collection("appUsers").get();
+    setUsers(snap.docs.map(d=>({id:d.id,...d.data()})));
+  };
+
+  useEffect(()=>{loadUsers();},[]);
+
+  const addUser=async()=>{
+    if(!newEmail||!newPw||!newName){setMsg("全項目を入力してください");return;}
+    setLoading(true);setMsg("");
+    try{
+      // Firebase Auth REST APIでユーザー作成
+      const res=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_CONFIG.apiKey}`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:newEmail,password:newPw,returnSecureToken:true})
+      });
+      const data=await res.json();
+      if(data.error)throw new Error(data.error.message);
+      // Firestoreにユーザー情報を保存
+      await getDb().collection("appUsers").doc(data.localId).set({
+        email:newEmail,name:newName,role:newRole,active:true,createdAt:new Date().toISOString()
+      });
+      setMsg("✅ ユーザーを追加しました");
+      setNewEmail("");setNewPw("");setNewName("");
+      loadUsers();
+    }catch(e){setMsg("✗ エラー: "+e.message);}
+    setLoading(false);
+  };
+
+  const toggleUser=async(uid,active)=>{
+    await getDb().collection("appUsers").doc(uid).update({active:!active});
+    loadUsers();
+  };
+
+  const deleteUser=async(uid)=>{
+    if(!confirm("このユーザーを削除しますか？"))return;
+    await getDb().collection("appUsers").doc(uid).delete();
+    loadUsers();
+  };
+
+  const IS={width:"100%",padding:"9px 11px",border:"1px solid #E2E8F0",borderRadius:7,fontSize:13,background:"#F8FAFC",outline:"none"};
+
+  return(
+    <div>
+      <div style={{fontSize:11,fontWeight:700,color:"#16A34A",marginBottom:10}}>👥 ユーザー管理</div>
+
+      {/* ユーザー一覧 */}
+      <div style={{background:"#F8FAFC",borderRadius:9,border:"1px solid #E2E8F0",marginBottom:12,overflow:"hidden"}}>
+        {users.length===0?<div style={{padding:12,fontSize:11,color:"#94A3B8",textAlign:"center"}}>ユーザーなし</div>
+        :users.map(u=>(
+          <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"1px solid #F1F5F9",opacity:u.active===false?0.5:1}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}</div>
+              <div style={{fontSize:10,color:"#94A3B8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.email}</div>
+            </div>
+            <span style={{fontSize:9,background:u.role==="admin"?"#1E293B":"#E2E8F0",color:u.role==="admin"?"#fff":"#64748B",borderRadius:4,padding:"2px 5px",flexShrink:0}}>{u.role==="admin"?"管理者":"一般"}</span>
+            {u.id!==userInfo?.uid&&<>
+              <button onClick={()=>toggleUser(u.id,u.active)}
+                style={{fontSize:9,padding:"3px 7px",border:"1px solid #E2E8F0",borderRadius:5,background:"#fff",cursor:"pointer",color:u.active===false?"#16A34A":"#DC2626",flexShrink:0}}>
+                {u.active===false?"有効化":"無効化"}
+              </button>
+              <button onClick={()=>deleteUser(u.id)}
+                style={{fontSize:9,padding:"3px 7px",border:"1px solid #FECACA",borderRadius:5,background:"#FEF2F2",cursor:"pointer",color:"#DC2626",flexShrink:0}}>
+                削除
+              </button>
+            </>}
+          </div>
+        ))}
+      </div>
+
+      {/* ユーザー追加 */}
+      <div style={{fontSize:11,fontWeight:700,color:"#1E293B",marginBottom:7}}>＋ ユーザーを追加</div>
+      <div style={{display:"grid",gap:7,marginBottom:7}}>
+        <input type="text" placeholder="名前" value={newName} onChange={e=>setNewName(e.target.value)} style={IS}/>
+        <input type="email" placeholder="メールアドレス" value={newEmail} onChange={e=>setNewEmail(e.target.value)} style={IS}/>
+        <input type="password" placeholder="初期パスワード（6文字以上）" value={newPw} onChange={e=>setNewPw(e.target.value)} style={IS}/>
+        <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={IS}>
+          <option value="user">一般</option>
+          <option value="admin">管理者</option>
+        </select>
+      </div>
+      {msg&&<div style={{fontSize:11,color:msg.startsWith("✅")?"#16A34A":"#DC2626",marginBottom:7}}>{msg}</div>}
+      <button onClick={addUser} disabled={loading}
+        style={{width:"100%",padding:"9px",background:loading?"#94A3B8":"#1E293B",color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        {loading?"追加中...":"ユーザーを追加"}
+      </button>
+    </div>
+  );
+}
+
 // ─── 同期診断パネル ───────────────────────────────
 function SyncPanel({store,pull,pushAll,syncing,syncErr,lastSync,synced}){
   const[log,setLog]=useState([]);
@@ -531,10 +739,11 @@ function App(){
   const days=useMemo(()=>drange(VIEW_S,VIEW_E),[]);
   const todayIdx=useMemo(()=>days.findIndex(d=>fmtD(d)===fmtD(TODAY)),[days]);
 
+  const{user,userInfo,authLoading,login,logout}=useAuth();
   const{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore}=useStore();
   const admin=useAdmin();
   const{w:winW}=useWindowSize();
-  const isPortrait=winW<600; // 縦向き判定（600px未満を縦向きとみなす）
+  const isPortrait=winW<600;
   const[tab,setTab]=useState("gantt");
   const[sel,setSel]=useState(fmtD(TODAY));
   const[modal,setModal]=useState(null);
@@ -545,7 +754,19 @@ function App(){
   const[mM,setMM]=useState(()=>new Date().getMonth()+1);
   const[pwModal,setPWModal]=useState(null);
   const[slideTask,setSlideTask]=useState(null);
-  const[completedOpen,setCompletedOpen]=useState(false); // 完工した工事の展開
+  const[completedOpen,setCompletedOpen]=useState(false);
+
+  // ログイン確認
+  if(authLoading)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#F1F5F9"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:24,marginBottom:8}}>🏗</div>
+        <div style={{fontSize:14,color:"#64748B"}}>読み込み中...</div>
+      </div>
+    </div>
+  );
+  if(!user||!userInfo)return <LoginScreen onLogin={login}/>;
+
 
   const clients     =get("clients");
   const sites       =get("sites");
@@ -1800,6 +2021,16 @@ function App(){
             </div>
           </div>
 
+          {/* ユーザー管理（管理者のみ） */}
+          {userInfo?.role==="admin"&&(
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍ユーザー管理</div>
+              <div style={{background:"#fff",borderRadius:10,border:"1px solid #E2E8F0",padding:"12px 14px"}}>
+                <UserManagePanel userInfo={userInfo}/>
+              </div>
+            </div>
+          )}
+
           {/* バックアップ・同期 */}
           <div style={{marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:700,color:"#64748B",marginBottom:7}}>▍バックアップ・同期</div>
@@ -1824,6 +2055,22 @@ function App(){
                   📂 JSONから復元
                   <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);localStorage.setItem(LS,JSON.stringify(d));alert("復元しました。ページを更新してください");}catch(_){alert("ファイルエラー");}};r.readAsText(e.target.files[0]);}}/>
                 </label>
+              </div>
+            </div>
+          </div>
+
+          {/* ログインユーザー情報・ログアウト */}
+          <div style={{marginBottom:16}}>
+            <div style={{background:"#fff",borderRadius:10,border:"1px solid #E2E8F0",padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{userInfo?.name||userInfo?.email}</div>
+                  <div style={{fontSize:10,color:"#94A3B8",marginTop:2}}>{userInfo?.email} · {userInfo?.role==="admin"?"管理者":"一般ユーザー"}</div>
+                </div>
+                <button onClick={()=>{if(confirm("ログアウトしますか？"))logout();}}
+                  style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:"8px 14px",fontSize:12,color:"#DC2626",fontWeight:700,cursor:"pointer"}}>
+                  ログアウト
+                </button>
               </div>
             </div>
           </div>
