@@ -51,6 +51,34 @@ const STATUS={
   absent:   {label:"欠勤",bg:"#FEE2E2",text:"#DC2626",border:"#FCA5A5"},
 };
 const COLORS=["#F97316","#3B82F6","#10B981","#F59E0B","#EC4899","#8B5CF6","#06B6D4","#EF4444","#84CC16","#F43F5E"];
+
+// 資格カテゴリごとに自動配色（同じカテゴリは常に同じ色）
+const QUAL_CAT_COLORS={
+  "技能講習":    {bg:"#EFF6FF",text:"#2563EB",border:"#BFDBFE"},
+  "安全衛生教育":{bg:"#F0FDF4",text:"#16A34A",border:"#BBF7D0"},
+  "作業主任者":  {bg:"#FEF3C7",text:"#D97706",border:"#FDE68A"},
+  "免許":        {bg:"#FDF4FF",text:"#9333EA",border:"#E9D5FF"},
+  "特別教育":    {bg:"#FFF1F2",text:"#E11D48",border:"#FECDD3"},
+  "その他":      {bg:"#F8FAFC",text:"#64748B",border:"#E2E8F0"},
+};
+// カテゴリ文字列からカラーを返す（未登録カテゴリは自動アサイン）
+const _catColorCache={};
+const _catColorPalette=[
+  {bg:"#ECFDF5",text:"#059669",border:"#A7F3D0"},
+  {bg:"#FFF7ED",text:"#EA580C",border:"#FED7AA"},
+  {bg:"#F0F9FF",text:"#0284C7",border:"#BAE6FD"},
+  {bg:"#FDF4FF",text:"#7C3AED",border:"#DDD6FE"},
+  {bg:"#FFF1F2",text:"#BE185D",border:"#FBCFE8"},
+];
+function getQualCatColor(category){
+  const cat=category||"その他";
+  if(QUAL_CAT_COLORS[cat])return QUAL_CAT_COLORS[cat];
+  if(!_catColorCache[cat]){
+    const idx=Object.keys(_catColorCache).length%_catColorPalette.length;
+    _catColorCache[cat]=_catColorPalette[idx];
+  }
+  return _catColorCache[cat];
+}
 const TABS=[{id:"gantt",icon:"📋",label:"工程"},{id:"staff",icon:"👷",label:"稼働"},{id:"report",icon:"📝",label:"日報"},{id:"monthly",icon:"📊",label:"月次"},{id:"config",icon:"⚙",label:"設定"}];
 const ADMIN_PW_KEY="kms_admin_pw";
 const IS={width:"100%",border:"1.5px solid #CBD5E1",borderRadius:10,padding:"11px 13px",fontSize:15,color:"#1E293B",background:"#fff",outline:"none"};
@@ -2144,7 +2172,7 @@ function App(){
                     <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:3}}>
                       {(w.qualIds||[]).map(qid=>{
                         const q=qualMaster.find(x=>x.id===qid);
-                        return q?<span key={qid} style={{fontSize:9,background:"#F0FDF4",color:"#16A34A",borderRadius:3,padding:"1px 5px"}}>{q.name}</span>:null;
+                        if(!q)return null;const qc=getQualCatColor(q.category);return <span key={qid} style={{fontSize:9,background:qc.bg,color:qc.text,border:`1px solid ${qc.border}`,borderRadius:3,padding:"1px 5px"}}>{q.name}</span>;
                       })}
                     </div>
                   )}
@@ -2159,8 +2187,12 @@ function App(){
               row:q=>(
               <div key={q.id} className="row" onClick={()=>openModal("qualM","edit",{...q,qName:q.name})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:"#fff"}}>
                 <div>
-                  <div style={{fontSize:13,fontWeight:700,color:"#0891B2"}}>{q.name}</div>
-                  <div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{q.category||"その他"}</div>
+                  {(()=>{const qc=getQualCatColor(q.category);return(<>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{q.name}</div>
+                      <span style={{fontSize:9,background:qc.bg,color:qc.text,border:`1px solid ${qc.border}`,borderRadius:4,padding:"1px 6px",fontWeight:700}}>{q.category||"その他"}</span>
+                    </div>
+                  </>);})()}
                 </div>
                 <span style={{fontSize:10,color:"#CBD5E1"}}>▶</span>
               </div>
@@ -2724,14 +2756,15 @@ function App(){
                 :<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                   {qualMaster.map(q=>{
                     const selected=(form.qualIds||[]).includes(q.id);
+                    const qc=getQualCatColor(q.category);
                     return(
                       <div key={q.id} onClick={()=>{
                         const cur=form.qualIds||[];
                         setForm({...form,qualIds:selected?cur.filter(x=>x!==q.id):[...cur,q.id]});
                       }} style={{padding:"5px 10px",borderRadius:15,fontSize:11,fontWeight:600,cursor:"pointer",
-                        background:selected?"#1E293B":"#F1F5F9",
-                        color:selected?"#fff":"#64748B",
-                        border:`1px solid ${selected?"#1E293B":"#E2E8F0"}`}}>
+                        background:selected?qc.text:qc.bg,
+                        color:selected?"#fff":qc.text,
+                        border:`1px solid ${selected?qc.text:qc.border}`}}>
                         {selected?"✓ ":""}{q.name}
                       </div>
                     );
