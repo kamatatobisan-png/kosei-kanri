@@ -300,12 +300,15 @@ async function saveHistory({userInfo, action, col, items, summary}){
     };
     // 追加
     await db.collection("history").add(entry);
-    // 50件超えたら古いものを削除
-    const snap=await db.collection("history").orderBy("ts","asc").get();
-    if(snap.size>HISTORY_MAX){
-      const toDelete=snap.docs.slice(0, snap.size-HISTORY_MAX);
+    // 件数チェック：count()集計クエリは1回の読み取りでカウント取得（全件読み込み不要）
+    const countSnap=await db.collection("history").count().get();
+    const total=countSnap.data().count;
+    if(total>HISTORY_MAX){
+      // 超過分のみ取得して削除（全件は読まない）
+      const overflow=total-HISTORY_MAX;
+      const oldSnap=await db.collection("history").orderBy("ts","asc").limit(overflow).get();
       const batch=db.batch();
-      toDelete.forEach(d=>batch.delete(d.ref));
+      oldSnap.docs.forEach(d=>batch.delete(d.ref));
       await batch.commit();
     }
   }catch(e){console.warn("履歴保存失敗:",e);}
