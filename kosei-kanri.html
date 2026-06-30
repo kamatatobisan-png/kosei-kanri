@@ -1248,6 +1248,25 @@ function App(){
     return segs;
   };
 
+  // 今日以降のバーのみ表示（過去は非表示）
+  const activeBarSegs=task=>{
+    const todayStr=fmtD(TODAY);
+    if(task.end<todayStr)return[]; // 過去の工程は非表示
+    // 今日以降を開始点とする
+    const effectiveStart=task.start>=todayStr?task.start:todayStr;
+    const si=days.findIndex(d=>fmtD(d)===effectiveStart);
+    const ei=days.findIndex(d=>fmtD(d)===task.end);
+    if(si<0||ei<0)return[];
+    const segs=[];let ss=null,sk=null;
+    for(let i=si;i<=ei;i++){
+      const s=!isWorkDay(fmtD(days[i]),task);
+      if(ss===null){ss=i;sk=s;}
+      else if(s!==sk){segs.push({left:ss*DW+2,width:(i-ss)*DW-2,skip:sk,startI:ss});ss=i;sk=s;}
+    }
+    if(ss!==null)segs.push({left:ss*DW+2,width:(ei-ss+1)*DW-4,skip:sk,startI:ss});
+    return segs;
+  };
+
   // ─── CRUD ─────────────────────────────────────
   const openModal=(type,mode,data={})=>{setForm({...data});setModal({type,mode});};
   const closeModal=()=>setModal(null);
@@ -1616,15 +1635,11 @@ function App(){
                 const labelTask=tasks.find(t=>t.siteId===s.id&&sel>=t.start&&sel<=t.end);
                 return(
                   <div key={s.id} className="row" onClick={()=>{
-                    if(labelTask)setSheet({type:"task",task:labelTask,site:s});
-                    else openModal("task","add",{siteId:s.id,name:"",start:sel,end:sel,workers:1,memo:"",note:"",isContract:false,plannedManDays:0,progressNote:""});
+                    openModal("task","add",{siteId:s.id,name:"",start:sel,end:sel,workers:1,memo:"",note:"",isContract:false,plannedManDays:0,progressNote:""});
                   }} style={{height:RH,borderBottom:"1px solid #F1F5F9",display:"flex",flexDirection:"column",justifyContent:"center",paddingLeft:8,borderLeft:`4px solid ${siteColor(s)}`,background:si%2===0?"#fff":"#FAFBFC",cursor:"pointer"}}>
                     <div style={{fontSize:11,fontWeight:700,color:siteColor(s),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{s.name}</div>
                     <div style={{fontSize:9,color:"#94A3B8",marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:LW-16}}>{cl?.name||""}</div>
-                    {labelTask
-                      ?<div style={{fontSize:9,fontWeight:700,color:siteColor(s),marginTop:1}}>{labelTask.name} {req>0?`${req}人`:""}</div>
-                      :<div style={{fontSize:8,color:"#CBD5E1",marginTop:1}}>＋ 工程を追加</div>
-                    }
+                    <div style={{fontSize:8,color:"#CBD5E1",marginTop:1}}>＋ 工程を追加</div>
                   </div>
                 );
               })}
@@ -1695,13 +1710,9 @@ function App(){
                     })}
                     {/* 今日線 */}
                     {todayIdx>=0&&<div style={{position:"absolute",top:0,bottom:0,left:todayIdx*DW+DW/2-1,width:2,background:"rgba(249,115,22,.5)",zIndex:3,pointerEvents:"none"}}/>}
-                    {/* タスクバー */}
+                    {/* タスクバー（今日以降のみ表示） */}
                     {tasks.filter(t=>t.siteId===site.id).map(task=>{
-                      const segs=barSegs(task);if(!segs.length)return null;
-                      const si=days.findIndex(d=>fmtD(d)===task.start);
-                      const ei=days.findIndex(d=>fmtD(d)===task.end);
-                      // 今日の位置（バー先頭からのpx）
-                      const todayPx=todayIdx>=si&&todayIdx<=ei?(todayIdx-si)*DW+DW/2:null;
+                      const segs=activeBarSegs(task);if(!segs.length)return null;
                       return segs.map((seg,si2)=>(
                         <div key={`${task.id}-${si2}`} className="bar-tap"
                           onClick={e=>{e.stopPropagation();setSheet({type:"task",task,site});}}
@@ -1712,24 +1723,18 @@ function App(){
                             boxShadow:seg.skip?"none":`0 1px 5px ${siteColor(site)}44`,
                             opacity:seg.skip?.35:1,
                             backgroundImage:seg.skip?"repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 6px)":"none"}}>
-                          {/* 過去部分を暗く塗りつぶす */}
-                          {!seg.skip&&todayPx!==null&&si2===0&&(
-                            <div style={{position:"absolute",left:0,top:0,bottom:0,width:Math.min(todayPx,seg.width),background:"rgba(0,0,0,.28)",pointerEvents:"none",zIndex:1}}/>
-                          )}
                           {!seg.skip&&si2===0&&(()=>{
                             const prog=task.isContract&&task.plannedManDays>0?calcProgress(task,reports,TODAY):null;
-                            // テキストをtodayから表示（バー内でtodayが見える場合）
-                            const textOffset=todayPx!==null?Math.min(Math.max(todayPx,0),seg.width-20):0;
                             return(
-                            <div style={{display:"flex",alignItems:"center",height:"100%",paddingLeft:7+textOffset,gap:4,overflow:"hidden",position:"relative",zIndex:2}}>
+                            <div style={{display:"flex",alignItems:"center",height:"100%",paddingLeft:7,gap:4,overflow:"hidden",position:"relative"}}>
                               {prog&&<div style={{position:"absolute",left:0,top:0,bottom:0,width:`${Math.min(prog.actualPct,100)}%`,background:"rgba(255,255,255,.18)",pointerEvents:"none"}}/>}
-                              <span style={{fontSize:11,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1,position:"relative",zIndex:1,textShadow:"0 1px 2px rgba(0,0,0,.4)"}}>{task.name}</span>
+                              <span style={{fontSize:11,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1,position:"relative",zIndex:1}}>{task.name}</span>
                               {prog?(
                                 <span style={{fontSize:9,color:"#fff",background:prog.gap>=0?"rgba(16,185,129,.7)":prog.gap>=-10?"rgba(234,179,8,.7)":"rgba(239,68,68,.7)",borderRadius:3,padding:"1px 5px",flexShrink:0,fontWeight:700,position:"relative",zIndex:1,whiteSpace:"nowrap"}}>
                                   {prog.actualPct}%{prog.gap>=0?`▲${prog.gap}`:`▼${Math.abs(prog.gap)}`}
                                 </span>
                               ):(
-                                <span style={{fontSize:10,color:"rgba(255,255,255,.9)",background:"rgba(0,0,0,.25)",borderRadius:3,padding:"1px 5px",flexShrink:0,position:"relative",zIndex:1}}>{task.workers}人</span>
+                                <span style={{fontSize:10,color:"rgba(255,255,255,.9)",background:"rgba(0,0,0,.2)",borderRadius:3,padding:"1px 5px",flexShrink:0,position:"relative",zIndex:1}}>{task.workers}人</span>
                               )}
                             </div>
                             );
