@@ -1252,11 +1252,12 @@ function App(){
   const activeBarSegs=task=>{
     const todayStr=fmtD(TODAY);
     if(task.end<todayStr)return[]; // 過去の工程は非表示
-    // 今日以降を開始点とする
     const effectiveStart=task.start>=todayStr?task.start:todayStr;
     const si=days.findIndex(d=>fmtD(d)===effectiveStart);
-    const ei=days.findIndex(d=>fmtD(d)===task.end);
-    if(si<0||ei<0)return[];
+    // 終了日が表示範囲外の場合は最終日まで表示
+    let ei=days.findIndex(d=>fmtD(d)===task.end);
+    if(ei<0)ei=days.length-1;
+    if(si<0||si>ei)return[];
     const segs=[];let ss=null,sk=null;
     for(let i=si;i<=ei;i++){
       const s=!isWorkDay(fmtD(days[i]),task);
