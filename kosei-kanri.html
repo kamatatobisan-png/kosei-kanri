@@ -1280,12 +1280,27 @@ function App(){
   };
 
   const saveAtt=()=>{
-    if(!form.workerName||!form.company||!form.startDate)return;
+    if(!form.startDate)return;
     const e={...form,endDate:form.endDate||form.startDate};
-    const action=modal.mode==="add"?"add":"edit";
-    const summary=`稼働「${e.workerName}」を${action==="add"?"追加":"編集"}（${e.startDate}〜${e.endDate}）`;
-    if(modal.mode==="add")set("attendance",[...attendance,{...e,id:uid()}],{userInfo,action,summary});
-    else set("attendance",attendance.map(a=>a.id===e.id?e:a),{userInfo,action,summary});
+    if(form.bulkMode){
+      // 一括追加：選択した作業員分ループ
+      const ids=form.workerIds||[];
+      if(!ids.length)return;
+      const newItems=[...attendance];
+      ids.forEach(wid=>{
+        const w=workerMaster.find(x=>x.id===wid);
+        if(!w)return;
+        newItems.push({...e,id:uid(),workerId:w.id,workerName:w.name,company:w.company});
+      });
+      const summary=`稼働一括追加 ${ids.length}人（${e.startDate}〜${e.endDate}）`;
+      set("attendance",newItems,{userInfo,action:"add",summary});
+    } else {
+      if(!form.workerName||!form.company)return;
+      const action=modal.mode==="add"?"add":"edit";
+      const summary=`稼働「${e.workerName}」を${action==="add"?"追加":"編集"}（${e.startDate}〜${e.endDate}）`;
+      if(modal.mode==="add")set("attendance",[...attendance,{...e,id:uid()}],{userInfo,action,summary});
+      else set("attendance",attendance.map(a=>a.id===e.id?e:a),{userInfo,action,summary});
+    }
     closeModal();
   };
   const delAtt=id=>{
@@ -1683,6 +1698,10 @@ function App(){
                     {/* タスクバー */}
                     {tasks.filter(t=>t.siteId===site.id).map(task=>{
                       const segs=barSegs(task);if(!segs.length)return null;
+                      const si=days.findIndex(d=>fmtD(d)===task.start);
+                      const ei=days.findIndex(d=>fmtD(d)===task.end);
+                      // 今日の位置（バー先頭からのpx）
+                      const todayPx=todayIdx>=si&&todayIdx<=ei?(todayIdx-si)*DW+DW/2:null;
                       return segs.map((seg,si2)=>(
                         <div key={`${task.id}-${si2}`} className="bar-tap"
                           onClick={e=>{e.stopPropagation();setSheet({type:"task",task,site});}}
@@ -1693,19 +1712,24 @@ function App(){
                             boxShadow:seg.skip?"none":`0 1px 5px ${siteColor(site)}44`,
                             opacity:seg.skip?.35:1,
                             backgroundImage:seg.skip?"repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 6px)":"none"}}>
+                          {/* 過去部分を暗く塗りつぶす */}
+                          {!seg.skip&&todayPx!==null&&si2===0&&(
+                            <div style={{position:"absolute",left:0,top:0,bottom:0,width:Math.min(todayPx,seg.width),background:"rgba(0,0,0,.28)",pointerEvents:"none",zIndex:1}}/>
+                          )}
                           {!seg.skip&&si2===0&&(()=>{
                             const prog=task.isContract&&task.plannedManDays>0?calcProgress(task,reports,TODAY):null;
+                            // テキストをtodayから表示（バー内でtodayが見える場合）
+                            const textOffset=todayPx!==null?Math.min(Math.max(todayPx,0),seg.width-20):0;
                             return(
-                            <div style={{display:"flex",alignItems:"center",height:"100%",paddingLeft:7,gap:4,overflow:"hidden",position:"relative"}}>
-                              {/* 進捗バー背景 */}
+                            <div style={{display:"flex",alignItems:"center",height:"100%",paddingLeft:7+textOffset,gap:4,overflow:"hidden",position:"relative",zIndex:2}}>
                               {prog&&<div style={{position:"absolute",left:0,top:0,bottom:0,width:`${Math.min(prog.actualPct,100)}%`,background:"rgba(255,255,255,.18)",pointerEvents:"none"}}/>}
-                              <span style={{fontSize:11,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1,position:"relative",zIndex:1}}>{task.name}</span>
+                              <span style={{fontSize:11,fontWeight:700,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1,position:"relative",zIndex:1,textShadow:"0 1px 2px rgba(0,0,0,.4)"}}>{task.name}</span>
                               {prog?(
                                 <span style={{fontSize:9,color:"#fff",background:prog.gap>=0?"rgba(16,185,129,.7)":prog.gap>=-10?"rgba(234,179,8,.7)":"rgba(239,68,68,.7)",borderRadius:3,padding:"1px 5px",flexShrink:0,fontWeight:700,position:"relative",zIndex:1,whiteSpace:"nowrap"}}>
                                   {prog.actualPct}%{prog.gap>=0?`▲${prog.gap}`:`▼${Math.abs(prog.gap)}`}
                                 </span>
                               ):(
-                                <span style={{fontSize:10,color:"rgba(255,255,255,.9)",background:"rgba(0,0,0,.2)",borderRadius:3,padding:"1px 5px",flexShrink:0,position:"relative",zIndex:1}}>{task.workers}人</span>
+                                <span style={{fontSize:10,color:"rgba(255,255,255,.9)",background:"rgba(0,0,0,.25)",borderRadius:3,padding:"1px 5px",flexShrink:0,position:"relative",zIndex:1}}>{task.workers}人</span>
                               )}
                             </div>
                             );
@@ -2823,7 +2847,50 @@ function App(){
           {/* 稼働登録（期間対応） */}
           {modal.type==="att"&&<>
             <MTitle c="#16A34A">{modal.mode==="add"?"＋ 稼働登録":"✏ 稼働編集"}</MTitle>
-            {workerMaster.length>0&&modal.mode==="add"&&(
+
+            {/* 一括追加モード切替（追加時のみ） */}
+            {modal.mode==="add"&&workerMaster.length>0&&(
+              <div style={{display:"flex",gap:6,marginBottom:10}}>
+                <button onClick={()=>setForm({...form,bulkMode:false})}
+                  style={{flex:1,padding:"7px",border:`2px solid ${!form.bulkMode?"#16A34A":"#E2E8F0"}`,borderRadius:8,fontSize:11,fontWeight:700,background:!form.bulkMode?"#F0FDF4":"#F8FAFC",color:!form.bulkMode?"#16A34A":"#94A3B8",cursor:"pointer"}}>
+                  1人追加
+                </button>
+                <button onClick={()=>setForm({...form,bulkMode:true,workerIds:[]})}
+                  style={{flex:1,padding:"7px",border:`2px solid ${form.bulkMode?"#16A34A":"#E2E8F0"}`,borderRadius:8,fontSize:11,fontWeight:700,background:form.bulkMode?"#F0FDF4":"#F8FAFC",color:form.bulkMode?"#16A34A":"#94A3B8",cursor:"pointer"}}>
+                  👥 一括追加
+                </button>
+              </div>
+            )}
+
+            {/* 一括追加：作業員マルチ選択 */}
+            {form.bulkMode&&(
+              <MField label={`作業員を選択（${(form.workerIds||[]).length}人選択中）`}>
+                <div style={{maxHeight:180,overflowY:"auto",border:"1px solid #E2E8F0",borderRadius:8,background:"#F8FAFC"}}>
+                  {sortedWorkers.map(w=>{
+                    const sel=(form.workerIds||[]).includes(w.id);
+                    return(
+                      <div key={w.id} onClick={()=>{
+                        const cur=form.workerIds||[];
+                        setForm({...form,workerIds:sel?cur.filter(x=>x!==w.id):[...cur,w.id]});
+                      }} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderBottom:"1px solid #F1F5F9",cursor:"pointer",background:sel?"#F0FDF4":"transparent"}}>
+                        <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${sel?"#16A34A":"#CBD5E1"}`,background:sel?"#16A34A":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                          {sel&&<span style={{color:"#fff",fontSize:10}}>✓</span>}
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:700,color:"#1E293B"}}>{w.name}</div>
+                          <div style={{fontSize:9,color:"#94A3B8"}}>{w.company}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button onClick={()=>setForm({...form,workerIds:sortedWorkers.map(w=>w.id)})}
+                  style={{marginTop:5,fontSize:10,padding:"3px 8px",border:"1px solid #E2E8F0",borderRadius:5,background:"#fff",cursor:"pointer",color:"#64748B"}}>全員選択</button>
+              </MField>
+            )}
+
+            {/* 1人追加：マスタ選択 */}
+            {!form.bulkMode&&workerMaster.length>0&&modal.mode==="add"&&(
               <MField label="マスタから選択">
                 <select onChange={e=>{const w=workerMaster.find(w=>w.id===e.target.value);if(w)setForm({...form,workerId:w.id,workerName:w.name,company:w.company});}} style={IS}>
                   <option value="">-- 作業員を選択 --</option>
@@ -2831,8 +2898,8 @@ function App(){
                 </select>
               </MField>
             )}
-            <MField label="氏名"><input type="text" placeholder="例：田中 太郎" value={form.workerName||""} onChange={e=>setForm({...form,workerName:e.target.value})} style={IS}/></MField>
-            <MField label="会社名"><input type="text" placeholder="例：山田建設" value={form.company||""} onChange={e=>setForm({...form,company:e.target.value})} style={IS}/></MField>
+            {!form.bulkMode&&<MField label="氏名"><input type="text" placeholder="例：田中 太郎" value={form.workerName||""} onChange={e=>setForm({...form,workerName:e.target.value})} style={IS}/></MField>}
+            {!form.bulkMode&&<MField label="会社名"><input type="text" placeholder="例：山田建設" value={form.company||""} onChange={e=>setForm({...form,company:e.target.value})} style={IS}/></MField>}
             <MField label="開始日（期間登録可）"><input type="date" value={form.startDate||""} onChange={e=>setForm({...form,startDate:e.target.value})} style={IS}/></MField>
             <MField label="終了日（1日だけなら開始日と同じ）"><input type="date" value={form.endDate||form.startDate||""} onChange={e=>setForm({...form,endDate:e.target.value})} style={IS}/></MField>
             <MField label="ステータス">
@@ -2845,10 +2912,30 @@ function App(){
                 ))}
               </div>
             </MField>
-            <MField label="除外設定（期間中でも休む日）">
+            <MField label="除外設定">
               <Chk val={!!form.skipWeekend} onChange={()=>setForm({...form,skipWeekend:!form.skipWeekend,skipSunday:false})} label="土日を除く"/>
               <Chk val={!!form.skipSunday&&!form.skipWeekend} onChange={()=>setForm({...form,skipSunday:!form.skipSunday,skipWeekend:false})} label="日曜のみ除く"/>
               <Chk val={!!form.skipHoliday} onChange={()=>setForm({...form,skipHoliday:!form.skipHoliday})} label="祝日を除く"/>
+              {/* 特定日除外 */}
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:5}}>特定日を除外</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}>
+                  {(form.skipDates||"").split(",").filter(s=>s.trim()).map(d=>(
+                    <span key={d} style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:12,padding:"2px 8px",fontSize:10,color:"#DC2626",display:"flex",alignItems:"center",gap:4}}>
+                      {d.trim()}
+                      <span onClick={()=>{const arr=(form.skipDates||"").split(",").filter(s=>s.trim()&&s.trim()!==d.trim());setForm({...form,skipDates:arr.join(",")});}} style={{cursor:"pointer",fontWeight:700}}>×</span>
+                    </span>
+                  ))}
+                </div>
+                <input type="date" style={{...IS,width:"auto"}}
+                  onChange={e=>{
+                    const v=e.target.value;if(!v)return;
+                    const arr=(form.skipDates||"").split(",").filter(s=>s.trim());
+                    if(!arr.includes(v))setForm({...form,skipDates:[...arr,v].join(",")});
+                    e.target.value="";
+                  }}/>
+                <div style={{fontSize:9,color:"#94A3B8",marginTop:2}}>日付を選ぶと除外リストに追加されます</div>
+              </div>
             </MField>
             <MField label="備考"><input type="text" placeholder="例：有給理由など" value={form.note||""} onChange={e=>setForm({...form,note:e.target.value})} style={IS}/></MField>
             <MBtns onClose={closeModal} onSave={saveAtt} onDelete={modal.mode==="edit"?()=>delAtt(form.id):null} saveColor="#16A34A"/>
