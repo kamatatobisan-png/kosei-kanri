@@ -1543,7 +1543,8 @@ function App(){
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         <div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:6,padding:"5px 11px",fontSize:13,color:"#EA580C",fontWeight:700}}>{fmtD(TODAY)}（{DOW[TODAY.getDay()]}）</div>
         {admin.isAdmin&&<div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:5,padding:"2px 7px",fontSize:10,color:"#16A34A",fontWeight:700}}>管理者</div>}
-        <button onClick={pull} style={{background:"#334155",border:"none",borderRadius:6,padding:"4px 9px",fontSize:11,color:"#94A3B8",cursor:"pointer"}}>{syncing?"⟳":"↻"}</button>
+        <button onClick={pull} style={{background:"#334155",border:"none",borderRadius:6,padding:"4px 9px",fontSize:11,color:"#94A3B8",cursor:"pointer"}} title="同期">{syncing?"⟳":"↻"}</button>
+        <button onClick={()=>window.location.reload()} style={{background:"#334155",border:"none",borderRadius:6,padding:"4px 9px",fontSize:13,color:"#94A3B8",cursor:"pointer"}} title="ページ更新">⟳</button>
       </div>
     </div>
 
