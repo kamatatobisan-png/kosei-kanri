@@ -277,6 +277,13 @@ function initFirebase(){
   window._fbApp=app;
   window._fbDb=firebase.firestore(app);
   window._fbAuth=firebase.auth(app);
+  // オフラインキャッシュ（永続化）：ページ更新時にサーバーへ再読込せず
+  // ローカルキャッシュから即時表示し、差分のみ通信するためコストを削減
+  try{
+    window._fbDb.enablePersistence({synchronizeTabs:true}).catch(err=>{
+      console.warn("Firestoreキャッシュ有効化失敗:",err.code);
+    });
+  }catch(_){}
   return{db:window._fbDb,auth:window._fbAuth};
 }
 function getDb(){return initFirebase().db;}
@@ -315,12 +322,20 @@ async function saveHistory({userInfo, action, col, items, summary}){
 }
 
 // Firestoreから全データ取得（小コレクションのみ）
+// 診断用：小コレクションは全件、大きいコレクション（日報・稼働）は件数のみ（count）取得
 async function fbGetAll(){
   const db=getDb();
   const result={};
-  await Promise.all(COLLECTIONS.map(async col=>{
+  const smallCols=["clients","sites","tasks","workerMaster","qualMaster"];
+  const bigCols=["reports","attendance"];
+  await Promise.all(smallCols.map(async col=>{
     const snap=await db.collection(col).get();
     result[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }));
+  // 日報・稼働は件数のみ（count()は1回読み取り扱い、全件読み込みより遥かに安い）
+  await Promise.all(bigCols.map(async col=>{
+    const countSnap=await db.collection(col).count().get();
+    result[col]=new Array(countSnap.data().count); // 件数だけ分かればOK（中身は空）
   }));
   return result;
 }
@@ -1552,7 +1567,6 @@ function App(){
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         <div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:6,padding:"5px 11px",fontSize:13,color:"#EA580C",fontWeight:700}}>{fmtD(TODAY)}（{DOW[TODAY.getDay()]}）</div>
         {admin.isAdmin&&<div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:5,padding:"2px 7px",fontSize:10,color:"#16A34A",fontWeight:700}}>管理者</div>}
-        <button onClick={pull} style={{background:"#334155",border:"none",borderRadius:6,padding:"4px 9px",fontSize:11,color:"#94A3B8",cursor:"pointer"}} title="同期">{syncing?"⟳":"↻"}</button>
         <button onClick={()=>window.location.reload()} style={{background:"#334155",border:"none",borderRadius:6,padding:"4px 9px",fontSize:13,color:"#94A3B8",cursor:"pointer"}} title="ページ更新">⟳</button>
       </div>
     </div>
