@@ -436,7 +436,7 @@ async function fbSaveCollection(col,items){
   await batch.commit();
 }
 
-function useStore(){
+function useStore(isReady){
   const loadLocal=()=>{
     try{const s=localStorage.getItem(LS);if(s)return JSON.parse(s);}catch(_){}
     return SEED;
@@ -452,7 +452,7 @@ function useStore(){
     try{localStorage.setItem(LS,JSON.stringify(next));}catch(_){}
   },[]);
 
-  // Firestoreから全データ取得してstateを更新
+  // Firestoreから全データ取得してstateを更新（手動更新ボタン・初回フォールバック用）
   const pull=useCallback(async()=>{
     setSyncing(true);setSyncErr(null);
     try{
@@ -488,24 +488,35 @@ function useStore(){
       const cacheAge=Date.now()-cacheAt;
       const cacheOK=cacheAge<CACHE_TTL&&(loadLocal().sites||[]).length>0;
       if(cacheOK){setSynced(true);setLastSync(nowStr());}
-      // Firestoreアクセスはログイン完了後（App側のisReadyエフェクト）に行う
     })();
   },[]);
 
-  // 30秒ごと自動pull（キャッシュ更新も行う）
+  // ─── リアルタイムリスナー（onSnapshot）───────────
+  // ログイン完了後、小コレクションをリアルタイム購読。
+  // ポーリング不要・変更があったドキュメントのみ課金される。
   useEffect(()=>{
-    const id=setInterval(()=>{
-      if(!document.hidden)pull().then(()=>localStorage.setItem("kms_cache_at",Date.now().toString()));
-    },30000);
-    return()=>clearInterval(id);
-  },[pull]);
-
-  // タブ復帰時pull
-  useEffect(()=>{
-    const fn=()=>{if(!document.hidden)pull();};
-    document.addEventListener("visibilitychange",fn);
-    return()=>document.removeEventListener("visibilitychange",fn);
-  },[pull]);
+    if(!isReady)return;
+    const db=getDb();
+    const smallCols=["clients","sites","tasks","workerMaster","qualMaster"];
+    const unsubs=smallCols.map(col=>
+      db.collection(col).onSnapshot(snap=>{
+        // 初回 or 変更分の読み取り数をカウント
+        const changes=snap.docChanges();
+        addReadCount(snap.metadata.fromCache?0:(changes.length||snap.size));
+        const items=snap.docs.map(d=>({id:d.id,...d.data()}));
+        _set(prev=>{
+          const next={...prev,[col]:items};
+          saveLocal(next);
+          return next;
+        });
+        setSynced(true);setLastSync(nowStr());
+        localStorage.setItem("kms_cache_at",Date.now().toString());
+      },err=>{
+        setSyncErr(err.message);
+      })
+    );
+    return()=>unsubs.forEach(u=>u());
+  },[isReady,saveLocal]);
 
   const setStore=useCallback(fn=>{
     _set(prev=>{const next=typeof fn==="function"?fn(prev):fn;saveLocal(next);return next;});
@@ -1099,7 +1110,9 @@ function App(){
   const todayIdx=useMemo(()=>days.findIndex(d=>fmtD(d)===fmtD(TODAY)),[days]);
 
   const{user,userInfo,authLoading,login,logout}=useAuth();
-  const{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore}=useStore();
+  // ログイン確認フラグ（早期returnはhookルール違反のため使わない）
+  const isReady=!authLoading&&!!user&&!!userInfo;
+  const{get,set,store,pull,pushAll,syncing,syncErr,synced,lastSync,setStore}=useStore(isReady);
   const admin=useAdmin();
   const{w:winW}=useWindowSize();
   const isPortrait=winW<600;
@@ -1138,14 +1151,6 @@ function App(){
   const[pwModal,setPWModal]=useState(null);
   const[slideTask,setSlideTask]=useState(null);
   const[completedOpen,setCompletedOpen]=useState(false);
-
-  // ログイン確認フラグ（早期returnはhookルール違反のため使わない）
-  const isReady=!authLoading&&!!user&&!!userInfo;
-
-  // ログイン完了後にFirestoreからデータ取得
-  useEffect(()=>{
-    if(isReady)pull();
-  },[isReady]);
 
 
   const clients     =get("clients");
@@ -1552,7 +1557,7 @@ function App(){
     {/* 同期バー */}
     {(syncErr||synced)&&(
       <div style={{background:syncErr?"#FEF2F2":"#F0FDF4",borderBottom:`1px solid ${syncErr?"#FECACA":"#BBF7D0"}`,padding:"3px 14px",fontSize:10,color:syncErr?"#DC2626":"#16A34A",display:"flex",justifyContent:"space-between"}}>
-        <span>{syncErr?`✗ ${syncErr}`:synced?"✓ Firebase同期済み":"⟳ 接続中..."}</span>
+        <span>{syncErr?`✗ ${syncErr}`:synced?"✓ リアルタイム同期中":"⟳ 接続中..."}</span>
         {lastSync&&<span style={{color:"#94A3B8"}}>最終同期 {lastSync}</span>}
       </div>
     )}
